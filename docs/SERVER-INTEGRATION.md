@@ -164,3 +164,134 @@ GET https://lightnetwork.pro/sites/<id>/provision.json?t=<bootstrap_token>
 - Legacy NAS rows (`10.0.1.2–.50`, `omada-13-local-*`) use `testing123`; new Q20 sites get random secrets through the normal path — never reuse the legacy secret.
 - Per-site secrets (WG private key, RADIUS secret, mgmt password) are provisioned at link time and **never** baked into the firmware image (unlike fleet-wide `mesh.key`).
 - Nothing here touches `sites-enabled/default`, `queries.conf`, cron scripts, or existing `.rsc` generation.
+
+---
+
+## 7. Zero-touch enrollment: flash → power on → appears on the server
+
+Goal: a freshly flashed main router, once it has Internet, registers itself
+with the server; the server verifies it is genuine LightNet firmware, adds it
+to a **LightNet Routers** list, and (immediately or after assignment) runs the
+*same* site-creation code the MikroTik flow uses — so each new Q20 gets the
+next WG IP / NAS row / site id automatically. Satellites never enrol; the main
+reports them.
+
+### 7a. What the server has / lacks (verified)
+
+- **No device registry exists.** `omada_access_points` / `unifi_access_points`
+  are owner-typed MAC lists; `sites` is the only router table and is created
+  only by `POST /api/owner/sites` (owner session required).
+- Every `sites` row needs an `owner_id` (`mikrotik_owners`, 22 owners; `13 =
+  LIGHTNET` is the house owner) and passes `require_mikrotik_slot` (quota per
+  subscription). An unattended router has no owner yet → enrollment must be
+  a **two-stage** process: *register* (no owner) → *provision* (owner known).
+- Admin SPA at `/admin` has sections overview / revenue / prices / owners /
+  owner-analytics; **no router list**. Owner panel lists only that owner's sites.
+- `allocate_wg_ip()` already hands out the next free `10.0.1.x`, so
+  "increment like the MikroTik script" is free once we call the same code.
+
+### 7b. Router identity and firmware verification
+
+The router can present:
+
+| Field | Source on the router | Notes |
+|---|---|---|
+| `mac` | `lightnet-macs id` (base MAC, `50:33:f0:…`) | ASUS OUI — server can whitelist OUIs |
+| `device_token` | `/etc/lightnet/device.token` (random UUID, created at first boot by uci-defaults) | per-device secret, survives sysupgrade |
+| `model`, `fw_version`, `fw_build` | `ubus system.board`, new `/etc/lightnet/firmware.id` written at build time (git commit + release tag + date) | server keeps a table of known builds (publish SHA256 from GitHub releases) |
+| `wg_public_key` | generated once at first boot (`wg genkey`), stored `/etc/lightnet/wg.key` | **the router creates its own keypair** — server never has to send a private key, which is better than the `.rsc` flow |
+| `sig` | `HMAC-SHA256(enroll_key, mac|device_token|wg_pub|fw_build|ts)` | `enroll_key` = fleet secret baked in the image (like `mesh.key`); needs `openssl-util` (~0.6 MB) in the build, or shell HMAC via busybox `sha256sum` |
+
+"Verify our firmware" therefore means three cheap checks on the server:
+OUI/model allowed, `fw_build` is in the known-builds table, and the HMAC
+validates with the fleet `enroll_key`. This is the same trust level as the
+secrets inside `install.rsc` (anyone who extracts the image gets the key), but
+it blocks random internet noise and lets you **rotate** `enroll_key` per
+firmware release. Replay is prevented by `ts` + a server-side nonce, and after
+the first contact the `device_token` is pinned to that MAC (first-seen wins;
+duplicate MAC with a different token → flagged, not overwritten).
+
+### 7c. Protocol (all HTTPS via `lightnetwork.pro`, nothing on `:5000`)
+
+```
+1. POST /api/router/enroll            router → server, every 60 s until provisioned
+   {mac, device_token, model, fw_version, fw_build, wg_public_key, hostname,
+    wan_ip, uptime, satellites:[{mac,name,signal,uplink}], ts, sig}
+   → {status:"pending", router_id:12}                    (new, unassigned)
+   → {status:"provisioned", provision:{…§5a JSON…}}      (owner set; secrets)
+   → {status:"rejected"} / {status:"blocked"}
+
+2. POST /api/router/heartbeat         every 5 min once provisioned (and over WG)
+   {mac, device_token, uptime, wan_ip, wg_ip, clients, satellites[], fw_build}
+   → {ok:true, commands:[{"type":"reboot"}|{"type":"reprovision"}|
+                         {"type":"upgrade","url":"…sysupgrade.bin","sha256":"…"}]}
+```
+
+Server-side on `enroll`:
+
+1. verify `sig`, OUI, `fw_build` → else 403 and log to `router_events`
+2. `INSERT IGNORE lightnet_routers (mac, device_token, model, fw_build, wg_public_key, status='pending', first_seen, last_seen, …)`; update `last_seen`, `wan_ip`, `satellites_json` on every call
+3. if `status='pending'` and a global setting `q20_auto_provision_owner_id`
+   is set (e.g. `13` = LIGHTNET), **or** an admin/owner has assigned
+   `owner_id` → call the *existing* `owner_create_site` internals
+   (`allocate_wg_ip`, `add_nas(client_kind='q20')`, `INSERT sites`,
+   `add_peer(router's wg_public_key, ip)`, `reload_freeradius_clients`) —
+   with `name = "Q20-<mac suffix>"` (renamable later) and `wg_private_key_enc = NULL`
+   because the router owns its key. Link `lightnet_routers.site_id`.
+4. return `provision` JSON built like `render_install_rsc` (minus WG private key, plus `mgmt` creds)
+
+Quota: either count Q20s against the owner's existing MikroTik quota
+(`require_mikrotik_slot`) or add `q20_quota` to `owner_subscriptions`. For the
+house owner `13` bypass the slot check (flag in settings).
+
+### 7d. The "LightNet Routers" list
+
+New table `lightnet_routers`:
+`id, mac UNIQUE, device_token_hash, model, fw_version, fw_build, hostname,
+wg_public_key, owner_id NULL, site_id NULL, status ENUM(pending, provisioned,
+rejected, blocked), wan_ip, last_seen, first_seen, satellites_json, clients,
+notes`.
+
+- **Admin** (`/admin/routers`, new SPA section + `GET /api/admin/routers`):
+  every Q20 ever seen, online/offline (last_seen < 10 min), firmware build,
+  owner, site, WG IP, satellite count; actions **Assign owner → provision**,
+  **Reject**, **Block**, **Reboot**, **Upgrade firmware** (queues a heartbeat
+  command pointing at a GitHub release asset + SHA256).
+- **Owner panel** (`owner.html` → "My routers" table already exists for
+  sites): Q20 sites show with `client_kind='q20'` badge and their satellites
+  (from `satellites_json`) — equivalent of today's `lightnet_access_points`
+  "Beacon" discovery, without RouterOS API polling.
+- **Claiming by owner (optional, UniFi-style):** owner types the MAC/serial
+  printed on the box into "Add router → LightNet Q20"; server sets
+  `owner_id` on the pending row; next enrol call provisions it. This avoids
+  the admin having to assign every unit and keeps the quota logic intact.
+
+### 7e. Router side changes (this repo)
+
+- uci-defaults: generate `/etc/lightnet/wg.key` (+ `.pub`), write
+  `/etc/lightnet/firmware.id` at build (build-image.sh stamps git rev/tag).
+- `files/etc/config/lightnet` → `config server 'cloud'`: `url
+  'https://lightnetwork.pro'` (default baked in, editable), `enabled '1'`,
+  `status`, `router_id`, `site_id`, `wg_ip`.
+- `usr/sbin/lightnet-cloud` (procd service, root only): state machine
+  `unenrolled → pending → provisioned`; enrol every 60 s while pending
+  (backoff to 10 min after 1 h), heartbeat every 5 min after; applies
+  `provision` JSON via `lightnet-provision` (§5b) and executes commands.
+  Includes the live satellite list from `/etc/lightnet/inform/*.json`.
+- `lightnet-inform` unchanged (satellite → main); main aggregates.
+- UI: Server card — "Registered with lightnetwork.pro · waiting for
+  assignment (router #12)" → "Linked: site 57 · WG 10.0.1.69 · RADIUS ok".
+  Manual URL override stays for private/self-hosted servers.
+- Firmware upgrade command: `sysupgrade -k` with the release asset after
+  SHA256 check; `/etc/lightnet` is already preserved so identity survives.
+
+### 7f. Why this is safe for production
+
+- All new: 1 table, 3 routes, 1 admin section, 2 nullable `sites` columns.
+  No change to RADIUS policy, `.rsc` generation, or MikroTik sites.
+- Provisioning reuses the exact functions MikroTik creation uses, so WG IP
+  allocation, NAS rows, FreeRADIUS reload and billing hooks stay consistent.
+- Secrets flow only after verification and only over HTTPS; the WG private
+  key never leaves the router.
+- FreeRADIUS restart on provision is the existing cost; with auto-provision
+  it happens once per new Q20, same as adding a MikroTik today.
