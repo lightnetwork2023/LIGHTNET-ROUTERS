@@ -324,3 +324,40 @@ already there for Omada:
   key never leaves the router.
 - FreeRADIUS restart on provision is the existing cost; with auto-provision
   it happens once per new Q20, same as adding a MikroTik today.
+
+## 8. Deployed status (2026-10-03)
+
+Live on `lightnet-server` — all additive, verified against production:
+
+- `radius.lightnet_routers` registry + `lightnet_firmware_builds` + events table.
+- `/opt/lightnet_q20.py` registered in `app.py`: `POST /api/router/enroll`,
+  `POST /api/router/heartbeat`, owner routes `GET /api/owner/q20`,
+  `POST /api/owner/q20/claim`, `PATCH /api/owner/q20/<id>`,
+  `POST /api/owner/q20/<id>/command` (reboot/reprovision/upgrade/reject/unreject).
+- Auto-provision under owner 13 → reuse of `lightnet_sites` (WG IP, NAS row,
+  live peer, FreeRADIUS reload). First router `q20-3698` → **site 65 /
+  `10.0.1.76`**, `client_kind='q20'`.
+- `hotspot_login_url()` branch: for `client_kind='q20'` the paid-voucher return
+  is `http://<lan_gateway>:3990/logon?username=<voucher>&password=…&userurl=…`
+  (chilli UAM; `uamsecret` unset → PAP straight to RADIUS, same as MikroTik's
+  http-pap). MikroTik sites still get `/login?username=…`.
+- `buy.html` (pay static): when the redirect carries chilli params
+  (`uamip`/`uamport`) the page (a) keeps chilli params for a client-side
+  fallback `/logon` URL and (b) replaces the MikroTik "I have a code" link
+  with an inline voucher form that navigates to the chilli `/logon`.
+  `/prelogin` was considered and rejected — it just redirects back to the
+  portal (loop); chilli serves custom pages only from `wwwdir`.
+- Owner dashboard (`/var/www/lightnetwork/owner.html`): new **LightNet Q20**
+  card — claim-by-MAC box + table (name, MAC, NAS IP, firmware, online/status,
+  AP count, clients) with Reboot / Upgrade / Rename / Reject·Unreject; Q20
+  rows in the MikroTik routers table get a `Q20` pill and no `.rsc` button.
+- Chilli on the router (`/var/run/lightnet-chilli.conf`): `net 192.168.88.0/24`,
+  `uamport 3990`, `uamserver …/buy?owner=13&site=65`, `nasip 10.0.1.76`,
+  `radiusnasid LIGHTNET`, `coaport 3799`, no `uamsecret` (PAP logon works).
+- Remote upgrade verified end-to-end: command queued → router fetched the
+  sysupgrade from `https://lightnetwork.pro/firmware/q20/` (public hosting;
+  the GitHub repo is private so release URLs are unusable by routers),
+  verified SHA256, flashed, rebooted, re-enrolled on build `1191aaf`.
+- Watch item: `/buy` requests from link previews (e.g. `WhatsApp` UA) fetch the
+  page but never run the JS bootstrap — looks like a dead load in logs but is
+  harmless. Real captive-sheet/browser opens call `/api/buy/bootstrap`.
