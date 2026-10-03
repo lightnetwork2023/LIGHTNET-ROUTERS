@@ -77,6 +77,13 @@ add_list firewall.ln_hs_zone.device='tun0'
 set firewall.ln_hs_zone.input='REJECT'
 set firewall.ln_hs_zone.output='ACCEPT'
 set firewall.ln_hs_zone.forward='REJECT'
+delete firewall.ln_hs_l2
+set firewall.ln_hs_l2=zone
+set firewall.ln_hs_l2.name='hotspot_l2'
+add_list firewall.ln_hs_l2.device='br-hotspot'
+set firewall.ln_hs_l2.input='DROP'
+set firewall.ln_hs_l2.output='DROP'
+set firewall.ln_hs_l2.forward='DROP'
 delete firewall.ln_hs_fwd
 set firewall.ln_hs_fwd=forwarding
 set firewall.ln_hs_fwd.src='hotspot'
@@ -106,7 +113,7 @@ EOF
 }
 
 fw_off() {
-	for s in ln_hs_zone ln_hs_fwd ln_hs_uam ln_hs_icmp ln_hs_dns; do uci -q delete "firewall.$s"; done
+	for s in ln_hs_zone ln_hs_l2 ln_hs_fwd ln_hs_uam ln_hs_icmp ln_hs_dns; do uci -q delete "firewall.$s"; done
 	uci commit firewall
 }
 
@@ -157,8 +164,24 @@ start() {
 
 running() { [ -s "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null; }
 
+# Client SSIDs must sit on the chilli VLAN while provisioned; anything else is a billing bypass
+# (sysupgrade/uci-defaults or a role re-apply can put them back on br-lan).
+wifi_guard() {
+	[ -s "$SERVER_JSON" ] || return 0
+	fixed=0
+	for i in default_radio0 default_radio1; do
+		[ "$(uci -q get wireless.$i.network)" = "hotspot" ] || { uci set wireless.$i.network='hotspot'; fixed=1; }
+	done
+	[ -n "$(uci -q get network.hotspot)" ] || { net_on; fixed=1; }
+	[ "$fixed" = 1 ] || return 0
+	uci commit wireless; uci commit network
+	log "client SSIDs moved back to the hotspot VLAN"
+	ubus call network reload >/dev/null 2>&1; wifi reload >/dev/null 2>&1
+	return 1
+}
+
 # start only if not already running (boot path may be triggered by several callers)
-ensure() { running && return 0; start; }
+ensure() { wifi_guard || sleep 5; running && return 0; start; }
 
 stop() {
 	[ -s "$PID" ] && kill "$(cat "$PID")" 2>/dev/null

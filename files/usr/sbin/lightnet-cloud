@@ -114,7 +114,7 @@ heartbeat() {
 		state_set last_ok "$(date +%s)"; state_set last_error ""
 		run_commands "$resp"
 		[ "$(jq "$resp" '@.reenroll')" = "true" ] && state_set next_enroll 0
-		[ -s "$SERVER_JSON" ] && ! /usr/sbin/lightnet-hotspot running && /usr/sbin/lightnet-hotspot start
+		[ -s "$SERVER_JSON" ] && /usr/sbin/lightnet-hotspot ensure
 		return 0
 	fi
 	[ "$(jq "$resp" '@.reenroll')" = "true" ] && { uci set lightnet.cloud.status='pending'; uci commit lightnet; }

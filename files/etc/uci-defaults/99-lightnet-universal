@@ -91,6 +91,11 @@ fi
 [ -n "$meshmac" ] && uci set wireless.mesh0.macaddr="$meshmac"
 ap1mac="$(/usr/sbin/lightnet-macs ap1)"
 [ -n "$ap1mac" ] && uci set wireless.default_radio1.macaddr="$ap1mac"
+# Provisioned hotspot survives sysupgrade: keep client SSIDs on the chilli VLAN, never on br-lan
+if [ -n "$(uci -q get network.hotspot)" ]; then
+	uci set wireless.default_radio0.network='hotspot'
+	uci set wireless.default_radio1.network='hotspot'
+fi
 [ -n "$meshkey" ] && uci set wireless.mesh0.key="$meshkey"
 
 if uci -q get network.@device[0].name | grep -q '^br-lan$'; then
