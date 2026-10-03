@@ -20,6 +20,10 @@ enabled() { [ "$(uci -q get lightnet.cloud.enabled || echo 1)" = "1" ]; }
 is_root() { [ "$(sed -n 's/^active_role=//p' /etc/lightnet/state 2>/dev/null | tail -n1)" = "root" ]; }
 state_set() { grep -q "^$1=" "$STATE" 2>/dev/null && sed -i "s|^$1=.*|$1=$2|" "$STATE" || echo "$1=$2" >>"$STATE"; }
 
+ensure_cfg() {
+	uci -q get lightnet.cloud >/dev/null 2>&1 || { uci set lightnet.cloud=cloud; uci set lightnet.cloud.enabled='1'; uci set lightnet.cloud.url='https://lightnetwork.pro'; uci set lightnet.cloud.status='unenrolled'; uci commit lightnet; }
+}
+
 ensure_keys() {
 	[ -s "$WG_KEY" ] || { wg genkey >"$WG_KEY" 2>/dev/null; chmod 600 "$WG_KEY"; }
 	[ -s "$WG_PUB" ] || wg pubkey <"$WG_KEY" >"$WG_PUB" 2>/dev/null
@@ -117,6 +121,7 @@ heartbeat() {
 }
 
 status() {
+	ensure_cfg
 	st="$(uci -q get lightnet.cloud.status || echo unenrolled)"
 	hs="$(sed -n 's/^last_ok=//p' "$STATE" 2>/dev/null)"; err="$(sed -n 's/^last_error=//p' "$STATE" 2>/dev/null)"
 	wgup=false; hands=0
@@ -128,6 +133,7 @@ status() {
 }
 
 once() {
+	ensure_cfg
 	enabled || return 0
 	is_root || return 0
 	[ -s "$ENROLL_KEY" ] || { log "no enroll key"; return 1; }

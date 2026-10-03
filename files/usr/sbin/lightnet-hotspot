@@ -111,7 +111,7 @@ write_conf() {
 		printf 'uamserver "%s"\n' "$buy"
 		printf 'radiusserver1 %s\nradiusserver2 %s\nradiussecret "%s"\n' "$rserver" "$rserver" "$secret"
 		printf 'radiusauthport %s\nradiusacctport %s\n' "$(jget '@.radius.auth_port')" "$(jget '@.radius.acct_port')"
-		printf 'radiusnasid "%s"\nradiusnasip %s\n' "$nasid" "$nasip"
+		printf 'radiusnasid "%s"\nnasip %s\n' "$nasid" "$nasip"
 		[ -n "$hsmac" ] && printf 'nasmac "%s:%s"\n' "$hsmac" "$nasid"
 		printf 'radiuslocationname "%s"\n' "$(jget '@.site.name' | tr -d '"')"
 		printf 'coaport %s\ncoanoipcheck\n' "$(jget '@.radius.coa_port')"

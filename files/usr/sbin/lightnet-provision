@@ -50,6 +50,7 @@ apply() {
 	[ -s "$src" ] && jsonfilter -i "$src" -e '@.radius.secret' >/dev/null 2>&1 || { log "invalid provision file"; return 1; }
 	[ "$src" = "$SERVER_JSON" ] || cp "$src" "$SERVER_JSON"
 	chmod 600 "$SERVER_JSON"
+	uci -q get lightnet.cloud >/dev/null 2>&1 || { uci set lightnet.cloud=cloud; uci set lightnet.cloud.enabled='1'; uci set lightnet.cloud.url='https://lightnetwork.pro'; uci commit lightnet; }
 	wg_on || { log "wireguard config failed"; return 1; }
 	/usr/sbin/lightnet-hotspot net on
 	/usr/sbin/lightnet-hotspot fw on

@@ -104,7 +104,9 @@ fi
 if grep -q '"adopted"[ ]*:[ ]*true' /tmp/lightnet-config.json 2>/dev/null; then
 	newver="$(jsonfilter -i /tmp/lightnet-config.json -e '@.config_version' 2>/dev/null)"
 	oldver="$(uci -q get lightnet.wifi.applied_version)"
-	if [ "$newver" != "$oldver" ]; then
+	want_hs="$(jsonfilter -i /tmp/lightnet-config.json -e '@.hotspot' 2>/dev/null)"; [ "$want_hs" = "true" ] || want_hs=false
+	have_hs=false; [ -n "$(uci -q get network.hotspot)" ] && have_hs=true
+	if [ "$newver" != "$oldver" ] || [ "$want_hs" != "$have_hs" ]; then
 		/usr/sbin/lightnet-apply-profile /tmp/lightnet-config.json && {
 			[ -n "$newver" ] && uci set lightnet.wifi.applied_version="$newver"
 			uci commit lightnet
