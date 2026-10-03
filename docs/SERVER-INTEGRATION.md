@@ -285,6 +285,35 @@ notes`.
 - Firmware upgrade command: `sysupgrade -k` with the release asset after
   SHA256 check; `/etc/lightnet` is already preserved so identity survives.
 
+### 7e-bis. What the live owner dashboard looks like today (`https://lightnetwork.pro/dashboard`, owner 13 LIGHTNET)
+
+Checked 2026-10-03 via `POST /api/owner/login` → `X-Owner-Token`.
+
+- Owner 13 "LIGHTNET": **43 MikroTik sites** (ids 14–60, WG `10.0.1.2 … 10.0.1.72`,
+  `next_nas_ip 10.0.1.76`), `mikrotik_quota 240`, 1 Omada AP, subscription
+  "10 year LIGHTNET grant" to 2036 → **quota is not a blocker** for Q20s under
+  this owner.
+- Sections: `routers` (table: Router · NAS IP · SSID · Status · Actions →
+  *Download install.rsc* + the paste command), `add-router` (two choices only:
+  **MIKROTIK** form name+SSID, and **Omada → Register access point** by AP MAC),
+  `omada`, `plans`, `clients`, `analytics` (per-router performance), `billing`,
+  `subscription`.
+- "Online" on the routers page = the server **pings the site's WG IP**
+  (`run_check_mikrotik_devices`, `ping -c2 -W2 10.0.1.x`) → a Q20 with its WG
+  tunnel up shows **online with zero extra work**.
+- No admin-wide router list anywhere; `/admin` is revenue/owners analytics only.
+
+So the Q20 fits the existing UI with two small additions, mirroring what is
+already there for Omada:
+
+1. **add-router → third card "LightNet Q20"**: text "Flash the LightNet
+   firmware, connect WAN to Internet, power on. The router registers itself
+   here within 2 minutes." plus a *Claim by MAC* box (same shape as the Omada
+   "Register access point" form) for owners other than the house owner.
+2. **routers table**: rows with `client_kind='q20'` show a Q20 badge, no
+   `.rsc` download, an *Access points* count (satellites from `satellites_json`),
+   and *Reboot* / *Upgrade* actions. Online state unchanged (WG ping).
+
 ### 7f. Why this is safe for production
 
 - All new: 1 table, 3 routes, 1 admin section, 2 nullable `sites` columns.
