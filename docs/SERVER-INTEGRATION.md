@@ -1,170 +1,166 @@
 # LightNet Q20 ↔ lightnet-server integration research
 
+**Status: research only. Nothing on the server has been changed.**
+Server is in production serving ~60 MikroTik sites plus Omada/UniFi/TP-Link
+portals; every proposal below is additive and must not alter existing
+RADIUS policy, tables, or the `.rsc` flow.
+
 Server: `lightnet-server` (Google VM `34.1.223.97`, internal `10.218.0.4`,
-Ubuntu 22.04). SSH: `lightnet-tech@34.1.223.97` (key `lightnet-tech`).
+Ubuntu 22.04). SSH: `lightnet-tech@34.1.223.97` (key `lightnet-tech`, sudo).
+
+Cross-checked files (read-only, 2026-10-03):
+`/opt/app.py` (7,906 lines), `/opt/lightnet_sites.py`, `/opt/lightnet_buy.py`,
+`/opt/check_mikrotik_status.py`, `/usr/local/bin/disconnect_expired_users.py`,
+`/etc/freeradius/3.0/{clients.conf,sites-enabled/default,sites-enabled/lightnet-dynamic-clients}`,
+`/etc/freeradius/3.0/mods-config/sql/main/mysql/queries.conf`,
+`/etc/nginx/sites-enabled/lightnetwork.pro`, `/etc/systemd/system/flask-app.service`,
+DB schemas `sites`, `nas`, `vouchers`, `radacct` samples, `wg show wg0`, root crontab,
+and the sample `lightnet-site57-install.rsc`.
+
+---
 
 ## 1. What runs on the server
 
-| Piece | Detail |
+| Piece | Verified detail |
 |---|---|
-| FreeRADIUS | auth `:1812`, acct `:1813`, CoA `:3799`; **dynamic clients**: NAS rows are read from the SQL `nas` table via site `lightnet-dynamic-clients` keyed on `Packet-Src-IP-Address` |
-| MariaDB `radius` | `radcheck` 4,593 users, `radacct` 4,060 sessions, `nas` ~70 rows, `sites`, `mikrotik_owners`, `owner_plans`, `radpostauth` |
-| WireGuard `wg0` | `:51820`, server IP `10.0.1.1`, pubkey `IcKEt3X8LBIr7BJgnKjKQMq/2YRCkGXIIHqigK/donU=`, ~60 site routers as peers on `10.0.1.x/32` |
-| nginx `:80/:443` | portals: `lightnet`, `lightnetwork.co.tz`, `lightnetwork.pro`, `pay.lightnet.com`, `tplink-portal`(:8001), `unifi-portal`, `omada` |
-| Flask/Gunicorn `:5000` | `/opt/app.py` (7,906 lines) + helper modules (`lightnet_sites.py`, `lightnet_buy.py`, `lightnet_access_points.py`, …); the real provisioning API |
+| FreeRADIUS 3 | `:1812/:1813`, CoA `:3799`. Static clients: `ubiquiti` (202.182.97.224), `localhost`. **Dynamic clients** for `10.0.1.0/24` (`lightnet_dynamic_clients` virtual server) — looks up `nas.nasname = Packet-Src-IP-Address`, pulls `secret`/`shortname`, `lifetime=120`, `require_message_authenticator=no` |
+| MariaDB `radius` | `radcheck` 4,593, `radacct` 4,060, `nas` ~70, `sites` (id, owner_id, name, wg_ip UNIQUE, radius_secret, wg_private_key_enc, wg_public_key, status, api_user, api_password_enc, ssid, contact_phone), `vouchers` (username, mac_address, session_timeout, first_login_time, expire_time, speed_limit, owner_id, site_id, used), `mikrotik_owners`, `owner_plans`, `owner_subscriptions`, `omada_access_points`, `buy_payments`, `location` |
+| WireGuard `wg0` | server `10.0.1.1`, `:51820`, pubkey `IcKEt3X8LBIr7BJgnKjKQMq/2YRCkGXIIHqigK/donU=`; ~60 peers `10.0.1.x/32`; conf `/etc/wireguard/wg0.conf` is rewritten by `lightnet_sites.add_peer/remove_peer` |
+| nginx | `lightnetwork.pro` (HTTPS, Let's Encrypt) proxies `/login`, `/register`, `/admin`, `/dashboard`, `/sites/` → `127.0.0.1:5000`; also `lightnetwork.co.tz`, `pay.lightnet.com`, `tplink-portal` (:8001), `unifi-portal`, `omada*` |
+| Flask / Gunicorn | `flask-app.service`, 8 sync workers, `0.0.0.0:5000` **(publicly reachable over plain HTTP — confirmed `curl http://34.1.223.97:5000/api/buy/bootstrap` → 200)**; root `/opt`, runs as root |
+| Omada controller | `tpeap.service` (TP-Link Omada) — Omada APs auth through the same RADIUS |
+| cron (root) | `disconnect_expired_users.py` every 5 min (CoA Disconnect by Framed-IP), `delete_expired_users.py` nightly, `flask-health-check.sh`, `daily-mysql-backup.sh` 02:00, `/etc/cron.d/omada-expire-sync`, `netflow` |
 
-## 2. How a site is added today (MikroTik)
+## 2. How a MikroTik site is added today (verified in code)
 
-Owner logs into `lightnetwork.pro` owner panel →
+Owner panel `/var/www/lightnetwork/owner.html` → Flask:
 
 ```
-POST /api/owner/sites        {name, ssid}          (X-Owner-Token auth)
-GET  /api/owner/sites/<id>/install.rsc             → MikroTik one-shot script
-GET  /api/buy/bootstrap?owner=<o>&site=<s>         → plans/portal data (public)
+GET  /api/owner/sites                       list + next free NAS IP   (X-Owner-Token)
+POST /api/owner/sites  {name, ssid}         create                    (X-Owner-Token)
+GET  /api/owner/sites/<id>/install.rsc      download script           (X-Owner-Token)
+GET  /sites/<id>/install.rsc                same, browser/HTML auth   (via nginx HTTPS)
+PATCH/DELETE /api/owner/sites/<id>          rename / remove
+GET  /api/buy/bootstrap?owner=&site=        public: owner, site, plans, pay_base
 ```
 
-`POST /api/owner/sites` (app.py ~6128) does, atomically:
+`owner_create_site` (app.py ≈6128) in one transaction:
+1. `lightnet_subscription.require_mikrotik_slot` — billing/slot check (HTTP 402 if none)
+2. `allocate_wg_ip` — first free host in `10.0.1.x` (scans `sites`, `nas`, **and live `wg show allowed-ips`**)
+3. `generate_keypair` (WG), `secrets.token_urlsafe(18)` RADIUS secret, random `api_password`; private key + api pw stored Fernet-encrypted
+4. `INSERT sites …`; `add_nas(wg_ip, secret, 'site<id>')` → `nas` row with `client_kind='mikrotik'`
+5. `apply_billing_to_nas`, `ensure_owner_site_locations`
+6. **after commit:** `add_peer` → `wg set wg0 peer … allowed-ips ip/32` **and** appends `[Peer]` to `wg0.conf`
+7. `reload_freeradius_clients()` → **`systemctl restart freeradius`** (comment in code says dynamic clients should pick it up, but a restart is still issued — a ~1–2 s auth blip across all sites every time a site is created; existing behaviour, not ours to change)
 
-1. `require_mikrotik_slot` — subscription check
-2. `allocate_wg_ip(cur)` — first free `10.0.1.x`
-3. `generate_keypair()` — WG keys, private stored Fernet-encrypted
-4. random `radius_secret`, management `api_user`/`api_password`
-5. `INSERT INTO sites …` + `add_nas` row (`nasname`=wg_ip, `shortname`=siteN)
-6. `add_peer(pub, wg_ip)` — **live** `wg set` (no reload needed)
-7. `reload_freeradius_clients()` — restart so the new NAS auths
+`render_install_rsc` (`lightnet_sites.py:287`) fills `/opt/templates/lightnet-install.rsc.template`
+with `__WG_NAS_IP__ __WG_CLIENT_PRIV__ __RADIUS_SECRET__ __SITE_NAME__ __SITE_SSID__
+__OWNER_ID__ __SITE_ID__ __OWNER_PHONE__ __HOTSPOT_LOGIN_HTML__ __API_USER__ __API_PASSWORD__`.
 
-`render_install_rsc` (`lightnet_sites.py:287`) fills a template with
-`__WG_NAS_IP__`, `__WG_CLIENT_PRIV__`, `__RADIUS_SECRET__`, `__SITE_NAME__`,
-`__OWNER_ID__`, `__SITE_ID__`, `__OWNER_PHONE__`, `__HOTSPOT_LOGIN_HTML__`,
-`__API_USER__`, `__API_PASSWORD__`.
+→ **The `.rsc` already carries every secret the router needs. A JSON rendering
+of the same `sites` row is the same security class. No new secret store needed.**
 
-The `.rsc` then configures on the MikroTik: WG client → `10.0.1.x`,
-RADIUS client → `10.0.1.1:1812/1813` with `src-address`=WG IP, hotspot on
-`192.168.88.0/24` (`login-by=http-pap,http-chap,mac`, `mac-as-username-
-and-password`, interim acct 5 m, CoA on), `login.html` that redirects to
-`https://lightnet.lightnetwork.pro/buy?owner=<o>&site=<s>&mac=$(mac)`,
-walled garden (`lightnet.lightnetwork.pro`, `pay.lightnet.com`,
-`*.lightnetwork.pro`, fonts.googleapis/gstatic, `10.0.1.1`, `34.1.223.97`),
-a management API user (server polls the router via RouterOS API over WG —
-see `/opt/check_mikrotik_status.py`), and a daily 04:00 reboot.
+What the `.rsc` makes the MikroTik do (matters for parity):
+- WG client `wg1` → `34.1.223.97:51820`, `10.0.1.x/32`, allowed `10.0.1.0/24`, keepalive 25 s, input accept from `wg1` (server reaches router API/winbox over tunnel)
+- `/radius add address=10.0.1.1 … src-address=<wg ip>` → **NAS-IP-Address = WG IP**
+- Hotspot `192.168.88.0/24`, `login-by=http-pap,http-chap,mac`, `mac-auth-mode=mac-as-username-and-password`, `radius-mac-format=XX:XX:XX:XX:XX:XX`, interim 5 m, `/radius incoming accept=yes` (CoA)
+- `login.html` → `https://lightnet.lightnetwork.pro/buy?owner=<o>&site=<s>&mac=$(mac)`
+- walled garden hosts `lightnet.lightnetwork.pro`, `pay.lightnet.com`, `*.lightnetwork.pro`, `fonts.googleapis.com`, `fonts.gstatic.com`; IPs `10.0.1.1`, `34.1.223.97`
+- DNS: DHCP hands the gateway as DNS, router forwards to 1.1.1.1/8.8.8.8 (captive DNS for HTTPS pay host)
+- user `lightnet`/`<api_password>` group full; API enabled — used by `run_check_mikrotik_devices` (RouterOS API over WG) and `lightnet_access_points.py` (reads DHCP leases/neighbors to list "Beacon" APs behind the router)
+- boot script: wait for `10.0.1.1`, clear unauthorized hosts so MAC-auth retries; daily 04:00 reboot
 
-**Key insight: the `.rsc` file IS the provisioning payload.** All secrets
-(WG private key, RADIUS secret, API password) travel inside it. A JSON
-equivalent for our firmware is no less secure than the existing flow.
+## 3. RADIUS policy the Q20 must satisfy (verified, `sites-enabled/default`)
 
-## 3. CoovaChilli vs OpenNDS FAS (decision)
+This is the critical part; it is **not** plain `radcheck` auth.
 
-| | CoovaChilli | OpenNDS |
+**authorize:** after `sql`, a single big query resolves the voucher:
+- match by **MAC**: `vouchers.mac_address = REPLACE(Calling-Station-Id,'-',':') AND expire_time > NOW()` → `Auth-Type := Accept` (no password check: this is how MAC re-login works)
+- else by **username**: `vouchers.username = User-Name` and (unused `expire_time IS NULL`, or still valid)
+- owner resolution: `sites.wg_ip = NAS-IP-Address` → `nas.nasname = Packet-Src-IP-Address` → `nas.nasname = NAS-IP-Address` → Omada AP via `Called-Station-Id`
+- reply: `Session-Timeout` (remaining seconds), `Mikrotik-Rate-Limit` (e.g. `15M/15M`)
+- rejects if owner subscription expired, or voucher owner ≠ router owner
+- **`if (Called-Station-Id =~ /LIGHTNET/i && rate =~ /^(\d+)M\/(\d+)M$/) → WISPr-Bandwidth-Max-Up/Down`** ← this is the existing non-MikroTik path (Omada/UniFi/TP-Link); a `radacct` row with `calledstationid = 20-E1-5D-44-17-B0:LIGHTNET` proves it is live
+
+**post-auth:** `UPDATE vouchers SET mac_address=Calling-Station-Id, first_login_time, expire_time = NOW()+session_timeout, speed_limit, used=1 WHERE username=User-Name AND expire_time IS NULL` — the voucher is bound to the device **on first successful login**.
+
+**accounting:** `sql` (radacct), interim updates from NAS. `disconnect_expired_users.py` sends CoA **Disconnect-Request keyed by `Framed-IP-Address`** to `nasipaddress:3799` using the `nas.secret` for that NAS — so the NAS **must** report `Framed-IP-Address` in accounting and accept Disconnect by Framed-IP.
+
+**Login completion after purchase** (`lightnet_buy.hotspot_login_get`):
+`http://192.168.88.1/login?username=<voucher>&password=ROCKY221122&dst=http://neverssl.com/`
+— **hard-coded MikroTik gateway and URL format**, `VOUCHER_PASSWORD='ROCKY221122'`, `LAN_GATEWAY='192.168.88.1'`; `public_site()` also hard-codes `lan_gateway: 192.168.88.1`. The buy portal needs to know it is talking to a Q20 to emit a different return URL.
+
+## 4. CoovaChilli vs OpenNDS — verified against the policy above
+
+| Requirement (from §3) | CoovaChilli | OpenNDS FAS |
 |---|---|---|
-| Architecture | RADIUS client; identical to MikroTik Hotspot | Firewall gate + external FAS does auth |
-| `radcheck`/`radacct` | native auth + accounting + CoA | **none** — billing pipeline gets nothing |
-| Kick/expiry | Disconnect-Request on `:3799` | custom `openndsctl` call |
-| Walled garden | `uamallowed`/`uamdomain` (host+IP) | `walledgarden` lists |
-| Login return | `http://<lan-ip>:3990/logon?username=&password=` → PAP→RADIUS | `/opennds_auth/?tok=` (FAS-signed) |
-| Packaging | `coova-chilli 1.6-10` in 23.05 feeds; upstream semi-dormant — **bench-test required under fw4** | already shipped |
+| PAP Access-Request with `User-Name`/`Password` | yes (`/logon?username&password`; `uamsecret` optional) | no — FAS would have to call RADIUS itself |
+| MAC-auth (`macauth`, `Calling-Station-Id` as `XX:XX:…`) | yes: `macauth`, `macpasswd`, `radiusmac`; format via `macallowlocal`/`--macsuffix`; default sends `Calling-Station-Id` as `XX-XX-…` — **policy already normalises `-`→`:`** | partial (FAS-side only) |
+| `NAS-IP-Address` = WG IP | `radiusnasip 10.0.1.x` | n/a |
+| `Called-Station-Id` containing `LIGHTNET` (for WISPr rate reply) | `radiuscalled`/`nasid` option (set `LIGHTNET` or `<mac>:LIGHTNET`) | n/a |
+| Honour `Session-Timeout`, `WISPr-Bandwidth-Max-*` | yes, natively | no |
+| Accounting with `Framed-IP-Address`, interim | yes (`interval`, `acct`) | **none** |
+| CoA Disconnect-Request by `Framed-IP-Address` on `:3799` | yes (`coaport 3799`, `coanoipcheck`) | no |
+| Walled garden hosts + IPs | `uamdomain`, `uamallowed` | `walledgarden` |
+| In ImmortalWrt 23.05 feed | `coova-chilli 1.6-10` (`kmod-tun`) | shipped already |
+| Risk | chilli must own a tun + DHCP for its subnet (conflicts with our `br-lan` dnsmasq design — needs its own hotspot bridge/VLAN or `dhcpif br-lan` with dnsmasq off on that iface); fw4 interplay untested | breaks accounting, expiry, CoA → unusable for a paid hotspot |
 
-**Recommendation: CoovaChilli.** The Q20 then looks identical to a
-MikroTik NAS — zero changes to auth/accounting/billing. OpenNDS would
-silently drop the entire accounting/enforcement chain. Keep OpenNDS as a
-fallback if chilli misbehaves on MT7621.
+**Decision: CoovaChilli.** With `radiusnasip` + `nasid`/`called` set, the server
+cannot tell a Q20 from a MikroTik site except by `client_kind`, and the existing
+Omada-style WISPr branch already supplies the rate limit. OpenNDS stays in the
+image as a non-billing fallback only.
 
-## 4. Proposed "just add the server URL" flow
+## 5. "Just add the server URL" — proposed design (additive only)
 
-Goal: admin opens the router's **Server** page, enters a server URL +
-site key, done. Design (mirrors how UniFi inform/Teleport work and
-reuses what the server already generates):
+### 5a. Server side — minimal, no change to existing routes/policy
 
-### Server side — one small additive change
-
-Add to `/opt/app.py` (≈40 lines, same auth surface as `install.rsc`):
+1. **DB:** `ALTER TABLE sites ADD COLUMN client_kind varchar(20) DEFAULT 'mikrotik', ADD COLUMN bootstrap_token varchar(64) NULL, ADD COLUMN lan_gateway varchar(45) NULL;` (nullable/defaulted — safe for live rows). `add_nas` already supports `client_kind`; set `'q20'` for these sites so dashboards can distinguish them.
+2. **Owner panel:** "Add router" gets a type select (MikroTik | LightNet Q20). For Q20, `POST /api/owner/sites` additionally stores `client_kind='q20'`, `lan_gateway='192.168.2.1'`, and a random `bootstrap_token`; response includes a ready-to-paste **provision URL**.
+3. **New route** (same owner-auth as `install.rsc`; also allow token-only access so the router can fetch without an owner session):
 
 ```
-GET /sites/<id>/provision.json?t=<token>
+GET https://lightnetwork.pro/sites/<id>/provision.json?t=<bootstrap_token>
 ```
-
-- `<token>` = per-site bootstrap token (add `sites.bootstrap_token`,
-  random 24-char, returned in `public_site()` so the owner panel can
-  display "Q20 link: https://34.1.223.97:5000/sites/57/provision.json?t=…").
-- Returns the same payload `render_install_rsc` produces, as JSON:
-
 ```json
-{
-  "ok": true,
-  "wg": {"ip": "10.0.1.69/32", "private_key": "…", "server_public_key": "IcKE…",
-          "endpoint": "34.1.223.97", "port": 51820, "allowed": "10.0.1.0/24"},
-  "radius": {"server": "10.0.1.1", "auth_port": 1812, "acct_port": 1813,
-              "secret": "o28PRLS…", "coa_port": 3799},
-  "site": {"id": 57, "name": "DODOMA", "owner_id": 13, "ssid": "LIGHTNET"},
-  "portal": {"uamserver": "https://lightnet.lightnetwork.pro/buy?owner=13&site=57",
-              "uamallowed": ["lightnet.lightnetwork.pro","pay.lightnet.com",
-                              "*.lightnetwork.pro","fonts.googleapis.com","fonts.gstatic.com"],
-              "uamallowed_ip": ["10.0.1.1","34.1.223.97"]},
-  "api": {"user": "lightnet", "password": "…"}      // for later server→router mgmt
-}
+{ "ok": true, "kind": "q20",
+  "site":   {"id":57, "owner_id":13, "name":"DODOMA", "ssid":"LIGHTNET", "contact_phone":"…"},
+  "wg":     {"address":"10.0.1.69/32", "private_key":"…", "server_public_key":"IcKE…",
+             "endpoint":"34.1.223.97", "port":51820, "allowed_ips":"10.0.1.0/24", "keepalive":25, "mtu":1420},
+  "radius": {"server":"10.0.1.1", "auth_port":1812, "acct_port":1813, "coa_port":3799,
+             "secret":"…", "nas_ip":"10.0.1.69", "called_station_id":"LIGHTNET", "interim":300},
+  "portal": {"buy_url":"https://lightnet.lightnetwork.pro/buy?owner=13&site=57",
+             "walled_hosts":["lightnet.lightnetwork.pro","pay.lightnet.com","*.lightnetwork.pro","fonts.googleapis.com","fonts.gstatic.com"],
+             "walled_ips":["10.0.1.1","34.1.223.97"]},
+  "mgmt":   {"user":"lightnet", "password":"…"} }
 ```
+   Serve it through the **HTTPS nginx vhost** (`location ^~ /sites/` already proxies to Flask), never over `:5000` plain HTTP. Consider marking the token used-once (`bootstrap_used_at`) and letting the owner regenerate it.
+4. **Buy portal return URL:** in `lightnet_buy`/`app.py` where `hotspot_login_get()` is used (≈6864) branch on the site's `client_kind`: for `q20` return `http://<lan_gateway>:3990/logon?username=<voucher>&password=ROCKY221122&userurl=http://neverssl.com/` (chilli's UAM logon endpoint; with `uamsecret` unset chilli accepts PAP directly). Also forward chilli's query params (`uamip`, `uamport`, `challenge`, `mac`) through the buy page so the return can be built client-side as a fallback.
+5. **Monitoring parity (later):** `run_check_mikrotik_devices` and `lightnet_access_points.py` speak RouterOS API. For Q20, add a tiny HTTP JSON equivalent over WG (`http://10.0.1.x/cgi-bin/lightnet-status`, already exists, add mgmt auth) and branch on `client_kind`. Not needed for billing to work.
 
-Optional later upgrade: `/api/router/claim` with short claim codes
-(UniFi-style "type SITE-57-9F3K"), which lets a factory unit
-self-register without the owner touching the panel — phase 2.
+### 5b. Router side (this repo)
 
-### Router side (this repo)
+- `files/etc/config/lightnet` → new `config server 'cloud'`: `url`, `enabled`, `site_id`, `owner_id`, `wg_ip`, `linked_at`, `last_ok`.
+- `usr/sbin/lightnet-provision <url>`: `wget -qO-` → `jsonfilter` → write uci `network.wgln` (proto wireguard, private key, `10.0.1.x/32`, peer with `allowed_ips 10.0.1.0/24`, `persistent_keepalive 25`, `endpoint_host/port`, `mtu 1420`), firewall zone `wgln` with input ACCEPT (server mgmt), chilli config, then `ifup wgln` + chilli restart. Store the raw JSON in `/etc/lightnet/server.json` (0600) so reprovision works offline; include `/etc/lightnet` already in `sysupgrade.conf`.
+- chilli (`/etc/config/chilli` or `/etc/chilli/config`): `radiusserver1/2 10.0.1.1`, `radiussecret`, `radiusnasip <wg ip>`, `radiusnasid LIGHTNET` (`called_station_id`), `uamserver <buy_url>`, `uamlisten 192.168.2.1`, `uamport 3990`, `uamanydns`, `uamallowed`/`uamdomain` from JSON, `macauth`, `interval 300`, `coaport 3799`, `coanoipcheck`, `dhcpif <hotspot bridge>`, `net 192.168.2.0/24` — **open bench question:** chilli replaces DHCP on the interface it serves; our `br-lan` dnsmasq must be disabled for that iface (or a dedicated `br-hotspot` carries the `LIGHTNET` SSIDs while mesh management stays on `br-lan`). Decide on bench; satellites bridge clients to the same L2 either way.
+- Only the **root** node provisions (check `active_role=root`); satellites never contact the server, matching MikroTik sites where only the gateway is the NAS.
+- UI: a **Server** card (Dashboard or Portal page): URL field, Link / Unlink, status line "Linked: site 57 (DODOMA) · WG 10.0.1.69 · RADIUS ok · last acct 12 s ago". Status from `lightnet-status` → `server:{linked, wg_up, radius_ok, site}` (radius_ok via `wg` handshake age + a 5-min `radtest`/`echo` is optional).
+- Keep the default SSID `LIGHTNET` — the RADIUS WISPr branch keys on it.
+- Build: add `coova-chilli kmod-tun` to `build-image.sh`.
 
-- `files/etc/config/lightnet` — new `server` section:
-  `option enabled`, `url` (the provision.json URL), `status`,
-  `wg_ip`, `site_id`, `owner_id`.
-- `files/usr/sbin/lightnet-provision` — fetch+apply:
-  1. `wget -qO- "$url"` → parse JSON (jsonfilter)
-  2. write WG iface `wgln` (priv key, `10.0.1.x/32`, peer server,
-     allowed `10.0.1.0/24`, keepalive 25, mtu 1420) + firewall rule
-     `input` accept on `wgln` (management over tunnel, like the .rsc)
-  3. generate chilli config (`/etc/chilli/defaults` or uci `chilli`):
-     `radiusserver1 10.0.1.1`, `radiussecret`, `uamlisten 192.168.2.1:3990`,
-     `uamserver` = portal URL (chilli appends `uamip/uamport/challenge/mac`),
-     `uamallowed`/`uamdomain` walled garden, `coaport 3799`,
-     `macauth` + `radiusmac` (`XX:XX:…` to match radcheck format),
-     `interim 300`, `tundev tun0`, `dhcpif br-lan` or its own subnet —
-     **decide on bench**: chilli on `br-lan` conflicts with dnsmasq DHCP;
-     standard chilli pattern is a dedicated `hotspot` interface/subnet.
-  4. restart wg + chilli; write `/etc/lightnet/server.state`
-     (`provisioned=1`, `site_id`, `wg_ip`).
-- `lightnet-apply-role`: only the **root** node provisions (satellites
-  never talk to the server — their client traffic reaches RADIUS via the
-  main, identical to MikroTik sites where only the gateway router is NAS).
-- `lightnet-inform`/`lightnet-status`: report `server_status` so the UI
-  shows "Linked to lightnet-server (site 57, 10.0.1.69)".
-- New UI section on the Portal page (or a small "Server" card on
-  Dashboard): server URL + Link button + status.
-- Build: add `coova-chilli` to `build-image.sh` PACKAGES.
+### 5c. Bench verification checklist (P1)
 
-### Portal compatibility check needed on bench
+1. Hand-write `server.json` for a test site (create it via the owner panel so `sites`/`nas`/peer exist — **this creates a real site and restarts FreeRADIUS briefly; do it once, off-peak**).
+2. `wg show` on server shows handshake from the Q20; `ping 10.0.1.1` from router.
+3. Phone joins `LIGHTNET` → chilli redirects to `buy?owner=&site=&mac=` → buy a test plan → return hits `:3990/logon` → `radpostauth` Accept, `vouchers.mac_address` bound, `radacct` start row with `nasipaddress=10.0.1.x`, `framedipaddress=192.168.2.x`, `calledstationid` containing `LIGHTNET`.
+4. Rate limit visible (WISPr reply) and enforced by chilli.
+5. Reconnect same phone → MAC-auth Accept without portal.
+6. Expire the voucher → `disconnect_expired_users.py` log shows `Disconnect-ACK` from `10.0.1.x`; client is kicked.
+7. Reboot Q20 → WG + chilli come back unattended; satellites unaffected.
 
-MikroTik returns the user to its own `/login` with username+password.
-Chilli returns via `http://192.168.2.1:3990/logon?username=&password=`.
-The `lightnet.lightnetwork.pro/buy` flow was built for MikroTik vars —
-needs a `nas=q20` (or chilli semantics) variant so post-purchase it
-redirects to the chilli `/logon` URL it receives in the redirect params
-(`uamip`,`uamport`,`mac`,`challenge`). Small change in the buy portal
-code; flag to whoever owns `/var/www/lightnetwork` / `lightnet_buy.py`.
+## 6. Production safety notes
 
-## 5. Phases
-
-1. **P0 research** (this doc): map server + pick chilli.
-2. **P1 bench**: `provision.json` endpoint on server (or hand-made JSON
-   for testing), `lightnet-provision` + chilli on one Q20, verify:
-   WG up → Access-Request sources from `10.0.1.x` → MAC-auth accept →
-   redirect to buy portal → voucher login → `radacct` rows appear →
-   expired user kicked.
-3. **P2 UI**: Server card + status; satellites untouched.
-4. **P3**: emulate enough of the RouterOS-API equivalents
-   (`check_mikrotik_status.py`, `lightnet_access_points.py` discovery)
-   as JSON over WG so the server's site-monitoring works for Q20s;
-   optional `/api/router/claim` self-registration.
-
-## 6. Security notes
-
-- `provision.json?t=` URL carries all site secrets — same risk class as
-  `install.rsc`; serve only on `:5000` (WG) or HTTPS, and consider
-  one-time/short-lived tokens later.
-- Never ship `wg_private_key`/`radius_secret` in the image — they are
-  per-site and provisioned at deploy time, unlike `mesh.key` (fleet-wide).
-- Keep `testing123` (legacy) and `uamsecret` out of any client download.
+- Flask on `:5000` is publicly reachable over HTTP; put `provision.json` behind the HTTPS vhost only and consider a GCP firewall rule for `:5000` (out of scope for this project, but flag it).
+- Creating a site restarts FreeRADIUS (existing behaviour). Batch Q20 site creation off-peak.
+- Legacy NAS rows (`10.0.1.2–.50`, `omada-13-local-*`) use `testing123`; new Q20 sites get random secrets through the normal path — never reuse the legacy secret.
+- Per-site secrets (WG private key, RADIUS secret, mgmt password) are provisioned at link time and **never** baked into the firmware image (unlike fleet-wide `mesh.key`).
+- Nothing here touches `sites-enabled/default`, `queries.conf`, cron scripts, or existing `.rsc` generation.
