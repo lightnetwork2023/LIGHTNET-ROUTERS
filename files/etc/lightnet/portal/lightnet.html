@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="sw">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Internet WIFI — lightNET</title>
+  <style>
+    :root { --bg:#f5f5f5; --ink:#222; --muted:#555; --line:#ddd; --accent:#e91e8c; --footer:#1a1a1a; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:Arial,Helvetica,sans-serif; background:var(--bg); color:var(--ink); min-height:100vh; display:flex; flex-direction:column; }
+    .wrap { flex:1; display:flex; justify-content:center; align-items:flex-start; padding:12px 20px 24px; }
+    .main { max-width:400px; width:100%; }
+    .logo { display:block; margin:0 auto 14px; width:168px; height:auto; border-radius:12px; }
+    h1 { font-size:20px; text-align:center; margin:0 0 4px; }
+    .sub { text-align:center; color:var(--muted); margin:0 0 18px; font-size:14px; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:14px; }
+    .form-group { margin-bottom:12px; }
+    label { font-size:13px; color:var(--muted); }
+    select, input { width:100%; padding:12px; border:1px solid var(--line); border-radius:4px; margin-top:4px; background:#fff; color:#000; font-size:16px; }
+    select:disabled, input:disabled { opacity:.75; background:#f0f0f0; }
+    .btn { width:100%; padding:13px 20px; border:0; border-radius:4px; background:var(--accent); color:#fff; font-size:16px; font-weight:bold; cursor:pointer; display:block; text-align:center; text-decoration:none; }
+    .btn:disabled { opacity:.6; }
+    .btn.ghost { background:#fff; color:var(--accent); border:1px solid var(--accent); }
+    .msg { font-size:14px; margin:10px 0 0; text-align:center; color:var(--muted); }
+    .err { color:#c62828; }
+    .ok { color:#2e7d32; }
+    .code { font-size:24px; letter-spacing:2px; text-align:center; font-weight:bold; margin:10px 0; display:none; }
+    .spin { display:none; margin:10px auto; width:26px; height:26px; border:3px solid #eee; border-top-color:var(--accent); border-radius:50%; animation:s 1s linear infinite; }
+    @keyframes s { to { transform:rotate(360deg); } }
+    .mac { font-size:12px; color:#999; text-align:center; margin-top:8px; }
+    footer { background:var(--footer); color:#eee; text-align:center; padding:12px; font-size:14px; }
+    footer a { color:#fff; }
+    .tabs { display:flex; gap:8px; margin-bottom:14px; }
+    .tabs button { flex:1; padding:10px; border:1px solid var(--line); background:#fff; border-radius:6px; font-size:15px; cursor:pointer; }
+    .tabs button.on { border-color:var(--accent); color:var(--accent); font-weight:bold; }
+    .pane { display:none; } .pane.on { display:block; }
+  </style>
+</head>
+<body>
+  <div class="wrap"><div class="main">
+    <img class="logo" src="logo.png" alt="lightNET" onerror="this.style.display='none'" />
+    <h1 id="ssid">LIGHTNET Wi‑Fi</h1>
+    <p class="sub" id="siteName">Nunua vocha au ingiza code yako ili kuunganishwa.</p>
+
+    <div class="card" id="notice" style="display:none"><p class="msg" id="noticeMsg"></p><div id="noticeActions"></div></div>
+
+    <div class="tabs">
+      <button type="button" id="tabBuy" class="on" onclick="showPane('buy')">Nunua Vocha</button>
+      <button type="button" id="tabCode" onclick="showPane('code')">Nina Code</button>
+    </div>
+
+    <div class="card pane on" id="paneBuy">
+      <form id="buyForm" onsubmit="return submitBuy(event)">
+        <div class="form-group">
+          <select id="provider" required>
+            <option value="">Chagua mtandao</option>
+            <option>Mpesa</option><option>Tigo</option><option>Airtel</option><option>Halopesa</option><option>Azampesa</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <input type="tel" id="phone" placeholder="namba ya simu (mfano, 0617462707)" inputmode="tel" autocomplete="tel" pattern="[0-9+]{9,13}" required />
+        </div>
+        <div class="form-group">
+          <select id="plan_id" required><option value="">Inapakia vifurushi…</option></select>
+        </div>
+        <button type="submit" class="btn" id="payBtn">Nunua Vocha</button>
+        <div class="spin" id="spin"></div>
+        <p class="msg" id="statusMsg"></p>
+        <p class="code" id="codeBox"></p>
+        <div id="paidActions"></div>
+        <p class="msg err" id="errorMessage"></p>
+      </form>
+    </div>
+
+    <div class="card pane" id="paneCode">
+      <form method="get" id="codeForm" onsubmit="return submitCode(event)">
+        <div class="form-group">
+          <input type="text" id="vcode" placeholder="Weka code yako" autocomplete="off" autocapitalize="characters" required />
+        </div>
+        <button type="submit" class="btn">Ingia</button>
+        <p class="msg err" id="codeErr"></p>
+      </form>
+    </div>
+
+    <div class="mac" id="clientMac"></div>
+  </div></div>
+  <footer><div>Msaada piga: <a id="supportTel" href="tel:"></a></div></footer>
+
+  <script src="config.js"></script>
+  <script>
+    // Router-hosted LightNet portal for CoovaChilli. Chilli appends its UAM params
+    // (res, uamip, uamport, challenge, mac, ip, userurl, reason) to this URL; the page talks
+    // to the LightNet server API cross-origin (CORS), same model as the UniFi/TP-Link portals.
+    var CFG = window.LIGHTNET || {};
+    var API = (CFG.api || 'https://lightnet.lightnetwork.pro').replace(/\/+$/, '');
+    var PASS = CFG.password || 'ROCKY221122';
+    var POLL_MS = 3000, MAX_POLLS = 40, pollTimer = null, pollCount = 0, pollDone = false;
+
+    function qs(n) { try { return (new URL(location.href).searchParams.get(n) || '').trim(); } catch (e) { return ''; } }
+    function $(id) { return document.getElementById(id); }
+    var OWNER = qs('owner') || CFG.owner || '', SITE = qs('site') || CFG.site || '';
+    var UAMIP = qs('uamip') || CFG.uamip || location.hostname, UAMPORT = qs('uamport') || CFG.uamport || (location.port || '3990');
+    var MAC = qs('mac'), USERURL = qs('userurl') || 'http://neverssl.com/';
+
+    function logonUrl(code) {
+      return 'http://' + UAMIP + ':' + UAMPORT + '/logon?username=' + encodeURIComponent(code) +
+        '&password=' + encodeURIComponent(PASS) + '&userurl=' + encodeURIComponent(USERURL);
+    }
+    function showPane(p) {
+      $('paneBuy').classList.toggle('on', p === 'buy'); $('paneCode').classList.toggle('on', p === 'code');
+      $('tabBuy').classList.toggle('on', p === 'buy'); $('tabCode').classList.toggle('on', p === 'code');
+    }
+    function notice(text, cls, html) {
+      $('notice').style.display = 'block'; $('noticeMsg').textContent = text; $('noticeMsg').className = 'msg ' + (cls || '');
+      $('noticeActions').innerHTML = html || '';
+    }
+    function showErr(t) { $('errorMessage').textContent = t || ''; }
+    function setStatus(t) { $('statusMsg').textContent = t || ''; }
+    function lock(l) {
+      ['provider', 'phone', 'plan_id'].forEach(function (id) { $(id).disabled = l; });
+      $('payBtn').disabled = l; $('spin').style.display = l ? 'block' : 'none';
+    }
+    function unlock() { pollDone = true; if (pollTimer) clearTimeout(pollTimer); lock(false); setStatus(''); $('codeBox').style.display = 'none'; $('paidActions').innerHTML = ''; }
+
+    function submitCode(e) {
+      e.preventDefault();
+      var c = ($('vcode').value || '').trim();
+      if (!c) return false;
+      location.href = logonUrl(c);
+      return false;
+    }
+
+    function detectProvider(v) {
+      var p = (v || '').replace(/\D/g, '');
+      if (p.startsWith('255')) p = '0' + p.slice(3);
+      var pref = p.slice(0, 3);
+      if (['074', '075', '076'].indexOf(pref) >= 0) return 'Mpesa';
+      if (['065', '067', '071'].indexOf(pref) >= 0) return 'Tigo';
+      if (['068', '069'].indexOf(pref) >= 0) return 'Airtel';
+      if (['061', '062'].indexOf(pref) >= 0) return 'Halopesa';
+      return '';
+    }
+    $('phone').addEventListener('input', function () {
+      var d = detectProvider(this.value); if (!d) return;
+      var sel = $('provider'); for (var i = 0; i < sel.options.length; i++) if (sel.options[i].text === d) { sel.selectedIndex = i; break; }
+    });
+
+    function schedulePoll(id) { if (pollDone) return; if (pollTimer) clearTimeout(pollTimer); pollTimer = setTimeout(function () { pollOnce(id); }, POLL_MS); }
+    async function pollOnce(id) {
+      if (pollDone) return;
+      pollCount += 1;
+      try {
+        var r = await fetch(API + '/api/buy/status/' + id, { cache: 'no-store' });
+        var data = await r.json();
+        if (!data.success || !data.payment) { setStatus('Inaangalia tena…'); schedulePoll(id); return; }
+        var p = data.payment;
+        if (p.status === 'paid' && p.voucher) {
+          pollDone = true; $('spin').style.display = 'none';
+          setStatus('Imelipwa — inakuunganisha kwenye Wi‑Fi…');
+          $('codeBox').style.display = 'block'; $('codeBox').textContent = p.voucher;
+          var href = logonUrl(p.voucher);
+          $('paidActions').innerHTML = '<a class="btn" href="' + href + '">Unganisha sasa</a>';
+          setTimeout(function () { location.replace(href); }, 2500);
+          return;
+        }
+        if (p.status === 'pending') {
+          setStatus('Thibitisha malipo kwenye simu…');
+          if (pollCount < MAX_POLLS) { schedulePoll(id); return; }
+          pollDone = true; $('spin').style.display = 'none';
+          setStatus('Bado inasubiri. Kama umelipa, bonyeza Angalia tena.');
+          $('paidActions').innerHTML = '<button type="button" class="btn ghost" id="again">Angalia tena</button>';
+          $('again').onclick = function () { startPoll(id); };
+          return;
+        }
+        showErr(p.error || 'Malipo hayajafanikiwa'); unlock();
+      } catch (e) { setStatus('Inaangalia tena…'); schedulePoll(id); }
+    }
+    function startPoll(id) { pollDone = false; pollCount = 0; lock(true); setStatus('Thibitisha malipo kwenye simu…'); $('codeBox').style.display = 'none'; $('paidActions').innerHTML = ''; pollOnce(id); }
+
+    async function submitBuy(e) {
+      e.preventDefault(); showErr(''); lock(true); setStatus('Inatuma ombi…');
+      try {
+        var r = await fetch(API + '/api/buy', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ owner_id: Number(OWNER), site_id: Number(SITE || 0), plan_id: Number($('plan_id').value),
+                                 phone: $('phone').value.trim(), client_mac: MAC })
+        });
+        var data = await r.json();
+        if (!data.success) throw new Error(data.error || 'Malipo yameshindikana');
+        startPoll(data.payment_id);
+      } catch (err) { showErr(err.message); unlock(); }
+      return false;
+    }
+
+    async function boot() {
+      if (CFG.ssid) $('ssid').textContent = CFG.ssid + ' Wi‑Fi';
+      if (CFG.phone) { $('supportTel').textContent = CFG.phone; $('supportTel').href = 'tel:' + CFG.phone; }
+      $('clientMac').textContent = MAC ? 'Kifaa: ' + MAC : '';
+      var res = qs('res');
+      if (res === 'failed') { notice('Code si sahihi, imeisha muda au inatumika kwenye kifaa kingine.', 'err'); showPane('code'); }
+      else if (res === 'already') { notice('Tayari umeunganishwa.', 'ok', '<a class="btn" href="' + USERURL + '">Endelea</a>'); }
+      else if (res === 'logoff') { notice('Umetoka. Ingiza code tena ukitaka kuendelea.', ''); showPane('code'); }
+      if (!OWNER && !SITE) { showErr('Router haijasajiliwa bado'); $('buyForm').style.display = 'none'; return; }
+      try {
+        var r = await fetch(API + '/api/buy/bootstrap?owner=' + encodeURIComponent(OWNER) + '&site=' + encodeURIComponent(SITE) + '&mac=' + encodeURIComponent(MAC), { cache: 'no-store' });
+        var data = await r.json();
+        if (!data.success) { showErr(data.error || 'Kiungo si sahihi'); $('buyForm').style.display = 'none'; return; }
+        OWNER = data.owner.id; if (data.site) SITE = data.site.id;
+        if (data.site && data.site.name) $('siteName').textContent = data.site.name;
+        if (data.owner.phone) { $('supportTel').textContent = data.owner.phone; $('supportTel').href = 'tel:' + data.owner.phone; }
+        var sel = $('plan_id'); sel.innerHTML = '<option value="">Chagua Kifurushi</option>';
+        (data.plans || []).forEach(function (p) { var o = document.createElement('option'); o.value = p.id; o.textContent = p.name + ' — ' + p.price_tzs + ' TSH'; sel.appendChild(o); });
+        if (!(data.plans || []).length) { sel.innerHTML = '<option value="">Hakuna vifurushi kwa sasa</option>'; }
+      } catch (e) {
+        $('plan_id').innerHTML = '<option value="">Vifurushi havikupakia</option>';
+        showErr('Imeshindikana kufikia seva ya LightNet. Jaribu tena.');
+        $('paidActions').innerHTML = '<button type="button" class="btn ghost" onclick="location.reload()">Jaribu tena</button>';
+      }
+    }
+    boot();
+  </script>
+</body>
+</html>

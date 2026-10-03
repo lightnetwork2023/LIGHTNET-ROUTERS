@@ -12,9 +12,28 @@ SOCK=/var/run/lightnet-chilli.sock
 HS_NET=192.168.88.0/24
 HS_GW=192.168.88.1
 VLAN=10
+PORTAL_SRC=/etc/lightnet/portal
+WWWDIR=/var/run/lightnet-www
 
 log() { logger -t lightnet-hotspot "$*"; }
 jget() { jsonfilter -i "$SERVER_JSON" -e "$1" 2>/dev/null; }
+jsq() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+# Router-hosted portal: chilli's UAM server (:3990) serves static files from wwwdir under /www/.
+# The page calls the LightNet server API cross-origin (CORS), like the UniFi/TP-Link portals do.
+portal_url() {
+	buy="$(jget '@.portal.buy_url')"
+	[ "$(uci -q get lightnet.cloud.portal)" = "server" ] && { printf '%s' "$buy"; return; }
+	owner="$(jget '@.site.owner_id')"; site="$(jget '@.site.id')"
+	api="${buy%%/buy*}"
+	mkdir -p "$WWWDIR"
+	cp -f "$PORTAL_SRC"/* "$WWWDIR"/ 2>/dev/null
+	[ -s /etc/lightnet/portal/logo.png ] || [ ! -s /www/luci-static/lightnet/logo.png ] || cp -f /www/luci-static/lightnet/logo.png "$WWWDIR"/logo.png
+	cat >"$WWWDIR/config.js" <<EOF
+window.LIGHTNET={owner:"$(jsq "$owner")",site:"$(jsq "$site")",api:"$(jsq "$api")",ssid:"$(jsq "$(jget '@.site.ssid')")",phone:"$(jsq "$(jget '@.site.contact_phone')")",uamip:"$HS_GW",uamport:"3990"};
+EOF
+	printf 'http://%s:3990/www/lightnet.html?owner=%s&site=%s' "$HS_GW" "$owner" "$site"
+}
 
 net_on() {
 	uci -q batch <<EOF
@@ -95,9 +114,13 @@ write_conf() {
 	[ -s "$SERVER_JSON" ] || return 1
 	secret="$(jget '@.radius.secret')"; nasip="$(jget '@.radius.nas_ip')"; rserver="$(jget '@.radius.server')"
 	[ -n "$secret" ] && [ -n "$nasip" ] || return 1
-	buy="$(jget '@.portal.buy_url')"
-	hosts="$(jget '@.portal.walled_hosts[*]' | grep -v '^\*' | tr '\n' ',' | sed 's/,$//')"
+	buy="$(portal_url)"
 	ips="$(jget '@.portal.walled_ips[*]' | tr '\n' ',' | sed 's/,$//')"
+	hosts=""
+	for h in $(jget '@.portal.walled_hosts[*]' | grep -v '^\*'); do
+		nslookup "$h" >/dev/null 2>&1 && hosts="$hosts,$h" || log "walled garden: cannot resolve $h, skipped"
+	done
+	hosts="${hosts#,}"
 	domains="$(jget '@.portal.walled_hosts[*]' | sed -n 's/^\*//p')"
 	hsmac="$(cat /sys/class/net/br-hotspot/address 2>/dev/null | tr 'a-f:' 'A-F-')"
 	nasid="$(jget '@.radius.nas_id')"; [ -n "$nasid" ] || nasid=LIGHTNET
@@ -106,9 +129,10 @@ write_conf() {
 		printf 'tundev tun0\nnet %s\nuamlisten %s\nuamport 3990\nuamuiport 3991\n' "$HS_NET" "$HS_GW"
 		printf 'dhcpif br-hotspot\ndhcpstart 10\ndhcpend 254\nlease 3600\n'
 		printf 'dns1 8.8.8.8\ndns2 1.1.1.1\nuamanydns\n'
-		printf 'uamallowed "%s%s%s"\n' "$hosts" "${ips:+,}" "$ips"
-		for d in $domains; do printf 'uamdomain %s\n' "$d"; done
-		printf 'uamserver "%s"\n' "$buy"
+		printf 'uamallowed "%s%s%s"\n' "$ips" "${hosts:+,}" "$hosts"
+		# no uamdomain: chilli's DNS inspection drops modern DNS replies ("malformed DNS"); wildcard hosts are expanded instead
+		for d in $domains; do for sub in "" www. lightnet. pay. api.; do nslookup "$sub${d#.}" >/dev/null 2>&1 && printf 'uamallowed %s\n' "$sub${d#.}"; done; done
+		printf 'uamserver "%s"\nwwwdir %s\n' "$buy" "$WWWDIR"
 		printf 'radiusserver1 %s\nradiusserver2 %s\nradiussecret "%s"\n' "$rserver" "$rserver" "$secret"
 		printf 'radiusauthport %s\nradiusacctport %s\n' "$(jget '@.radius.auth_port')" "$(jget '@.radius.acct_port')"
 		printf 'radiusnasid "%s"\nnasip %s\n' "$nasid" "$nasip"
