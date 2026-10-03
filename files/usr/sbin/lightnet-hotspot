@@ -139,7 +139,7 @@ write_conf() {
 		printf 'uamallowed "%s%s%s"\n' "$ips" "${hosts:+,}" "$hosts"
 		# no uamdomain: chilli's DNS inspection drops modern DNS replies ("malformed DNS"); wildcard hosts are expanded instead
 		for d in $domains; do for sub in "" www. lightnet. pay. api.; do nslookup "$sub${d#.}" >/dev/null 2>&1 && printf 'uamallowed %s\n' "$sub${d#.}"; done; done
-		printf 'uamserver "%s"\nwwwdir %s\n' "$buy" "$WWWDIR"
+		printf 'uamserver "%s"\nwwwdir %s\nnochallenge\n' "$buy" "$WWWDIR"
 		printf 'radiusserver1 %s\nradiusserver2 %s\nradiussecret "%s"\n' "$rserver" "$rserver" "$secret"
 		printf 'radiusauthport %s\nradiusacctport %s\n' "$(jget '@.radius.auth_port')" "$(jget '@.radius.acct_port')"
 		printf 'radiusnasid "%s"\nnasip %s\n' "$nasid" "$nasip"
