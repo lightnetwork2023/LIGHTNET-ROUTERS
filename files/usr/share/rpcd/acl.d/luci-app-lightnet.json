@@ -1,0 +1,29 @@
+{
+	"luci-app-lightnet": {
+		"description": "Grant access to the LightNet dashboard",
+		"read": {
+			"uci": [ "lightnet" ],
+			"ubus": {
+				"system": [ "board", "info" ],
+				"network.device": [ "status" ],
+				"network.interface.lan": [ "status" ],
+				"network.interface.wan": [ "status" ],
+				"network.wireless": [ "status" ]
+			},
+			"file": {
+				"/tmp/lightnet/state": [ "read" ],
+				"/etc/lightnet/nodes.json": [ "read" ]
+			}
+		},
+		"write": {
+			"uci": [ "lightnet" ],
+			"ubus": {
+				"file": [ "write" ]
+			},
+			"file": {
+				"/tmp/lightnet/state": [ "write" ],
+				"/etc/lightnet/nodes.json": [ "write" ]
+			}
+		}
+	}
+}

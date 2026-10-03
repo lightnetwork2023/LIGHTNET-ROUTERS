@@ -1,0 +1,21 @@
+# LightNet Q20 firmware notes
+
+- Build: `./build-image.sh` (ImageBuilder at `~/immortalwrt-imagebuilder-23.05.4-ramips-mt7621`, profile `jcg_q20-pb-boot`). Copy factory/sysupgrade to `~/Desktop/asus openwrt/firmware/`.
+- Recovery flash: `curl --http0.9 -F firmware=@factory.bin http://192.168.1.1/upload.cgi`, poll `/status.html` until `done`, then GET `/reboot.cgi` (recovery often does not reboot by itself).
+- LuCI views: bump the filename (`*-vN.js`) and update `usr/share/luci/menu.d/luci-app-lightnet.json` on every UI change; browsers cache view JS aggressively.
+- LuCI's `sysauth_http` cookie has `path=/cgi-bin/luci/`, so it is NOT sent to `/cgi-bin/lightnet-*`. Views send `Authorization: Bearer <L.env.sessionid>`; `lightnet-admin-auth` validates it. uhttpd only forwards standard headers (custom `X-*` headers are dropped).
+- Views must set `handleSave/handleSaveApply/handleReset: null` and avoid `: null` children (renders the text "null").
+- Adoption policy: wired BATMAN neighbor => auto-adopt; wireless => pending until Approve. Reject stores the satellite's `boot_id` in `/etc/lightnet/rejected/<mac>`; satellite leaves the mesh until reboot (new boot_id clears it).
+- UI test: Selenium + `/usr/bin/chromium` + `/usr/bin/chromedriver` (no Node installed, Playwright unusable).
+- `build-image.sh` does NOT copy output; copy `bin/targets/ramips/mt7621/*jcg_q20-pb-boot-squashfs-{factory,sysupgrade}.bin` to the Desktop firmware folder manually.
+- PB-Boot recovery `info.html` reports board `Xiaomi CR660X` on all Q20 units; flash chip (`F59L1G81MA`/`W29N01HV`/`Unknow`) identifies the unit.
+- The PC usually cannot reach satellites directly; SSH via the main: `ssh -o ProxyCommand="ssh -W %h:%p root@192.168.2.1" root@<sat-ip>`. Dropbear has no sftp-server: use `scp -O`.
+- If no SSH: log in to LuCI over link-local (`http://[fe80::...%25eth0]/cgi-bin/luci/`) and POST `/cgi-bin/lightnet-role` with `Authorization: Bearer <sysauth>`. ubus `file.exec` is denied.
+- Role priority: WAN with a real upstream IP (not 192.168.1/2.x) => root before any controller probing. Unadopted, non-rejected agents with no controller for 90s re-run auto (prevents all-agent deadlock).
+- Units: q20-0580 (50:33:f0:a5:05:80), q20-dfac (50:33:f0:44:df:ac, F59L1G81MA), q20-3698 (50:33:f0:5a:36:98, W29N01HV).
+- Login: LuCI user `LIGHTNET` (rpcd login section `rpcd.lightnet`), root has the same password (hash set in uci-defaults). Empty root password no longer works. Technician PC SSH uses key `~/.ssh/id_ed25519` (added to live units' `/etc/dropbear/authorized_keys` only, not in the image). Use `-o BatchMode=yes`.
+- MT7915 5 GHz AP (phy1-ap0) defaults to the same BSSID `00:0c:43:26:59:97` on every unit; this breaks phones on the mesh. `lightnet-macs ap1` (+7, locally administered) gives each unit its own; set in uci-defaults and `set_base_macs`.
+- Satellite names: controller-side aliases in `/etc/lightnet/names/<mac>` (set via `lightnet-adopt` action `rename`), shown as `name` in topology/pending. Shared UI lib is now `lightnet/ui2.js` (rename the file when changing it; LuCI caches it).
+- Restart: `lightnet-action` `{"action":"restart","mac":...}`. Main = local reboot; approved satellite = queued in `/tmp/lightnet-cmd/<mac>`, delivered in the next inform response (`"command":"reboot"`, ≤15 s).
+- Topology tree (`view/lightnet/topology-v1.js`): satellites report `uplink_mac/iface/tq/signal/rate` (BATMAN next hop toward the controller, from `batctl tg` + `batctl o`); UI maps uplink hardif MACs (+4/+5/+6) back to nodes. Shared UI lib is now `lightnet/ui3.js`.
+- Selenium test scripts that click Restart will really reboot units; use view-only scripts for re-checks.

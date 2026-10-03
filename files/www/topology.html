@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LIGHTNETWORK SOLUTION • Q20 Topology</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#e5edf5;background:#07141f}
+body{margin:0;padding:24px}.wrap{max-width:1100px;margin:auto}.brand{display:flex;align-items:center;gap:14px}.brand img{height:54px;max-width:130px;object-fit:contain}
+.top{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:18px}
+h1{font-size:26px;margin:0}.muted{color:#94a3b8}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:14px}
+.card{background:#172033;border:1px solid #263449;border-radius:12px;padding:16px;box-shadow:0 6px 18px #0005}
+.status{display:inline-block;padding:4px 10px;border-radius:999px;font-weight:700;font-size:12px}
+.online{background:#064e3b;color:#6ee7b7}.offline{background:#7f1d1d;color:#fca5a5}
+.role{color:#7dd3fc;text-transform:uppercase;font-size:12px;letter-spacing:.08em}
+.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.kv{display:grid;grid-template-columns:95px 1fr;gap:7px;margin-top:12px}.kv div:nth-child(odd){color:#94a3b8}
+.links{margin-top:18px;background:#111827;border:1px solid #263449;border-radius:12px;padding:16px}
+.link{display:flex;align-items:center;gap:10px;margin:9px 0}.dot{width:10px;height:10px;border-radius:50%;background:#ef4444}.dot.on{background:#22c55e}
+.pill{border:1px solid #334155;border-radius:999px;padding:3px 8px;color:#cbd5e1;font-size:12px}
+button{background:#2563eb;color:white;border:0;border-radius:8px;padding:8px 12px;cursor:pointer}
+.small{font-size:12px}
+</style>
+</head>
+<body><div class="wrap">
+<div class="top"><div class="brand"><img src="/luci-static/lightnet/logo-topology.png" alt="LightNet"><div><h1>LIGHTNETWORK SOLUTION</h1><div class="muted">Live Q20 mesh/backhaul status • expected nodes stay visible when offline</div></div></div><button onclick="load()">Refresh</button></div>
+<div id="summary" class="muted" style="margin-bottom:14px">Loading…</div>
+<div id="nodes" class="grid"></div>
+<div class="links"><b>Backhaul links</b><div id="links"></div></div>
+<div class="muted small" style="margin-top:14px">Data refreshes automatically every 5 seconds.</div>
+</div>
+<script>
+function esc(s){return String(s??'').replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function lastSeen(ts){return ts?new Date(ts*1000).toLocaleString():'never'}
+function badge(n){return n.online?'<span class="status online">ONLINE</span>':'<span class="status offline">OFFLINE</span>'}
+async function load(){try{const r=await fetch('/cgi-bin/q20-topology?ts='+Date.now(),{cache:'no-store',headers:{'Authorization':'Bearer '+location.hash.slice(1)}});const d=await r.json();if(d.ok===false){document.getElementById('summary').textContent=d.error||'Authentication required';return}render(d)}catch(e){document.getElementById('summary').textContent='Controller query failed: '+e}}
+function render(d){
+ const online=d.nodes.filter(n=>n.online).length;
+ document.getElementById('summary').textContent=online+'/'+d.nodes.length+' nodes online • updated '+new Date(d.generated*1000).toLocaleTimeString();
+ document.getElementById('nodes').innerHTML=d.nodes.map(n=>`
+  <div class="card"><div style="display:flex;justify-content:space-between;align-items:start"><div><div class="role">${esc(n.role)}</div><h2 style="margin:4px 0">${esc(n.name||n.hostname)}</h2></div>${badge(n)}</div>
+  <div class="kv"><div>IP</div><div class="mono">${esc(n.ip)}</div><div>MAC</div><div class="mono">${esc(n.mac)}</div><div>Uplink</div><div>${esc(n.path)}</div><div>SSH</div><div>${n.ssh?'reachable':'not reachable'}</div><div>Mesh</div><div>${n.mesh_established?'established':'not established'}</div><div>Signal</div><div>${n.mesh_signal_dbm===null?'—':esc(n.mesh_signal_dbm)+' dBm'}</div><div>Mesh RX</div><div>${n.mesh_rx_mbit===null?'—':esc(n.mesh_rx_mbit)+' Mbit/s'}</div><div>Last seen</div><div>${lastSeen(n.last_seen)}</div></div></div>`).join('');
+ const main=(d.nodes.find(n=>n.role==='main')||{hostname:'controller'}); const mainName=main.name||main.hostname;
+ const links=d.nodes.filter(n=>n.role!=='main').map(n=>`<div class="link"><span class="dot ${n.wired?'on':''}"></span><span class="pill">Wired</span><span class="dot ${n.wireless?'on':''}"></span><span class="pill">Wireless mesh</span><span class="mono">${esc(mainName)} ↔ ${esc(n.name||n.hostname)}</span></div>`).join('');
+ document.getElementById('links').innerHTML=links||'<div class="muted">No satellite nodes configured.</div>';
+}
+load();setInterval(load,5000);
+</script></body></html>

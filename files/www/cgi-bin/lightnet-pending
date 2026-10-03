@@ -1,0 +1,38 @@
+#!/bin/sh
+printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+/usr/sbin/lightnet-admin-auth || { printf '{"ok":false,"error":"authentication required"}\n'; exit 0; }
+
+BATN="$(batctl n 2>/dev/null)"
+
+derive_mac() {
+	mac="$1"; off="$2"
+	OIFS="$IFS"; IFS=':'; set -- $mac; IFS="$OIFS"
+	[ $# -eq 6 ] || return 1
+	printf '02:%s:%s:%s:%s:%02x' "$2" "$3" "$4" "$5" $(( (0x$6 + off) & 255 ))
+}
+
+printf '{"nodes":['
+first=1
+for f in /etc/lightnet/inform/*.json; do
+	[ -f "$f" ] || continue
+	mac="$(basename "$f" .json | tr 'A-F' 'a-f')"
+	adopted=0
+	grep -qi "^$mac$" /etc/lightnet/adopted.list 2>/dev/null && adopted=1
+	wmac="$(derive_mac "$mac" 4)"
+	mmac="$(derive_mac "$mac" 5)"
+	wired=0
+	wireless=0
+	printf '%s\n' "$BATN" | awk -v mac="$wmac" 'NR > 2 && tolower($2) == mac && $1 != "mesh0" { found=1 } END { exit !found }' && wired=1
+	printf '%s\n' "$BATN" | awk -v mac="$mmac" 'NR > 2 && tolower($2) == mac && $1 == "mesh0" { found=1 } END { exit !found }' && wireless=1
+	backhaul="unknown"
+	[ "$wired" = 1 ] && [ "$wireless" = 1 ] && backhaul="wired+wireless"
+	[ "$wired" = 1 ] && [ "$wireless" = 0 ] && backhaul="wired"
+	[ "$wired" = 0 ] && [ "$wireless" = 1 ] && backhaul="wireless"
+	rejected=0
+	[ -f "/etc/lightnet/rejected/$mac" ] && rejected=1
+	[ $first -eq 0 ] && printf ','
+	first=0
+	alias="$(head -n1 "/etc/lightnet/names/$mac" 2>/dev/null | tr -cd "A-Za-z0-9 ._'-")"
+	printf '{"device_id":"%s","name":"%s","adopted":%s,"rejected":%s,"wired":%s,"wireless":%s,"backhaul":"%s","inform":%s}' "$mac" "$alias" "$adopted" "$rejected" "$wired" "$wireless" "$backhaul" "$(tr -d '\n' <"$f")"
+done
+printf ']}\n'

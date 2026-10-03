@@ -1,0 +1,29 @@
+#!/bin/sh
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\r\n' ' '; }
+printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+/usr/sbin/lightnet-admin-auth || { printf '{"ok":false,"error":"authentication required"}\n'; exit 0; }
+if [ "$REQUEST_METHOD" = "POST" ]; then
+	body="$(head -c "${CONTENT_LENGTH:-4096}" 2>/dev/null)"
+	ssid="$(printf '%s' "$body" | sed -n 's/.*"ssid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+	mode="$(printf '%s' "$body" | sed -n 's/.*"mode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+	key="$(printf '%s' "$body" | sed -n 's/.*"key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+	[ -n "$ssid" ] && uci set lightnet.wifi.ssid="$ssid"
+	case "$mode" in
+		portal|open|psk2|psk3) uci set lightnet.wifi.ssid_mode="$mode" ;;
+	esac
+	[ -n "$key" ] && uci set lightnet.wifi.key="$key" || uci -q delete lightnet.wifi.key
+	version="$(uci -q get lightnet.wifi.config_version || echo 0)"
+	version=$((version + 1))
+	uci set lightnet.wifi.config_version="$version"
+	uci commit lightnet
+	( /usr/sbin/lightnet-apply-role apply-wifi >/dev/null 2>&1 & )
+	printf '{"ok":true,"config_version":%s}\n' "$version"
+	exit 0
+fi
+printf '{"ssid":"%s","mode":"%s","encryption":"%s","key":"%s","config_version":%s,"portal_ready":%s}\n' \
+	"$(json_escape "$(uci -q get lightnet.wifi.ssid || echo LIGHTNET)")" \
+	"$(json_escape "$(uci -q get lightnet.wifi.ssid_mode || echo open)")" \
+	"$(json_escape "$(uci -q get lightnet.wifi.encryption || echo none)")" \
+	"$(json_escape "$(uci -q get lightnet.wifi.key)")" \
+	"$(uci -q get lightnet.wifi.config_version || echo 1)" \
+	"$( [ -f /etc/lightnet/portal.ready ] && echo 1 || echo 0 )"

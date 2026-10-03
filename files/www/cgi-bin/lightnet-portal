@@ -1,0 +1,13 @@
+#!/bin/sh
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\r\n' ' '; }
+printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+/usr/sbin/lightnet-admin-auth || { printf '{"ok":false,"error":"authentication required"}\n'; exit 0; }
+wgup=0
+ip link show wg0 2>/dev/null | grep -q 'state UP' && wgup=1
+portal_ready=0
+[ -f /etc/lightnet/portal.ready ] && portal_ready=1
+printf '{"portal_ready":%s,"wireguard_up":%s,"radius_server":"%s","uam_server":"%s","nas_identifier":"%s"}\n' \
+	"$portal_ready" "$wgup" \
+	"$(json_escape "$(uci -q get lightnet.portal.radius_server 2>/dev/null)")" \
+	"$(json_escape "$(uci -q get lightnet.portal.uam_server 2>/dev/null)")" \
+	"$(json_escape "$(uci -q get lightnet.portal.nas_identifier 2>/dev/null)")"

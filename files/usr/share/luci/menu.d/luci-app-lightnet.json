@@ -1,0 +1,94 @@
+{
+	"admin/lightnet": {
+		"title": "LightNet",
+		"order": 1,
+		"action": {
+			"type": "firstchild",
+			"preferred": "dashboard",
+			"recurse": true
+		},
+		"depends": {
+			"acl": [
+				"luci-app-lightnet"
+			]
+		}
+	},
+	"admin/lightnet/dashboard": {
+		"title": "Home",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "lightnet/dashboard-v12"
+		},
+		"depends": {
+			"acl": [
+				"luci-app-lightnet"
+			]
+		}
+	},
+	"admin/lightnet/mesh": {
+		"title": "Devices",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "lightnet/mesh-v11"
+		},
+		"depends": {
+			"acl": [
+				"luci-app-lightnet"
+			]
+		}
+	},
+	"admin/lightnet/wifi": {
+		"title": "Wi-Fi",
+		"order": 30,
+		"action": {
+			"type": "view",
+			"path": "lightnet/wifi-v11"
+		},
+		"depends": {
+			"acl": [
+				"luci-app-lightnet"
+			]
+		}
+	},
+	"admin/lightnet/role": {
+		"title": "Mode",
+		"order": 40,
+		"action": {
+			"type": "view",
+			"path": "lightnet/role-v12"
+		},
+		"depends": {
+			"acl": [
+				"luci-app-lightnet"
+			]
+		}
+	},
+	"admin/lightnet/portal": {
+		"title": "Portal",
+		"order": 50,
+		"action": {
+			"type": "view",
+			"path": "lightnet/portal-v11"
+		},
+		"depends": {
+			"acl": [
+				"luci-app-lightnet"
+			]
+		}
+	},
+	"admin/lightnet/topology": {
+		"title": "Topology",
+		"order": 25,
+		"action": {
+			"type": "view",
+			"path": "lightnet/topology-v2"
+		},
+		"depends": {
+			"acl": [
+				"luci-app-lightnet"
+			]
+		}
+	}
+}

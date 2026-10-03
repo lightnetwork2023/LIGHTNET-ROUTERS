@@ -1,0 +1,474 @@
+#!/bin/sh
+
+STATE=/etc/lightnet/state
+CONTROLLER="$(uci -q get lightnet.main.controller || echo 192.168.2.1)"
+CONFIGURED_ROLE="$(uci -q get lightnet.main.role || echo auto)"
+DETECT_WAIT="$(uci -q get lightnet.main.detect_wait || echo 60)"
+LOCK=/tmp/lightnet-role.lock
+
+log() { logger -t lightnet "$*"; }
+
+exec 9>"$LOCK"
+lock_wait=0
+until flock -n 9; do
+	[ "$lock_wait" -ge "$DETECT_WAIT" ] && { log "role change skipped; another detector is running"; exit 0; }
+	sleep 1
+	lock_wait=$((lock_wait + 1))
+done
+state_set() {
+	key="$1"; val="$2"
+	grep -q "^$key=" "$STATE" 2>/dev/null && sed -i "s/^$key=.*/$key=$val/" "$STATE" || echo "$key=$val" >> "$STATE"
+}
+state_get() { sed -n "s/^$1=//p" "$STATE" 2>/dev/null | tail -n 1; }
+
+br_section() {
+	i=0
+	while :; do
+		name="$(uci -q get "network.@device[$i].name")"
+		[ -z "$name" ] && break
+		[ "$name" = "br-lan" ] && { echo "$i"; return; }
+		i=$((i + 1))
+	done
+	echo 0
+}
+
+wan_ipv4() {
+	ubus call network.interface.wan status 2>/dev/null | jsonfilter -e '@["ipv4-address"][0].address' 2>/dev/null
+}
+lan_ipv4() {
+	ubus call network.interface.lan status 2>/dev/null | jsonfilter -e '@["ipv4-address"][0].address' 2>/dev/null
+}
+
+MGMT_PREFIX="fd4c:6e65:7400"
+
+controller_alive() {
+	self="$(/usr/sbin/lightnet-macs id 2>/dev/null)"
+	for c in "[$MGMT_PREFIX::1]" "$CONTROLLER"; do
+		response="$(wget -q -T 2 -t 1 -O- "http://$c/cgi-bin/lightnet-role" 2>/dev/null)"
+		printf '%s' "$response" | grep -q '"active_role"[ ]*:[ ]*"root"' || continue
+		[ -n "$self" ] && printf '%s' "$response" | grep -q "\"device_id\"[ ]*:[ ]*\"$self\"" && continue
+		return 0
+	done
+	return 1
+}
+
+set_mgmt() {
+	if [ "$1" = "root" ]; then
+		addr="$MGMT_PREFIX::1/64"
+	else
+		id="$(/usr/sbin/lightnet-macs id 2>/dev/null | tr -d ':')"
+		addr="$MGMT_PREFIX::5:$(printf '%s' "$id" | cut -c7-10):$(printf '%s' "$id" | cut -c11-12)/64"
+	fi
+	uci -q batch <<EOF
+set network.lnmgmt=interface
+set network.lnmgmt.proto='static'
+set network.lnmgmt.device='br-lan'
+delete network.lnmgmt.ip6addr
+add_list network.lnmgmt.ip6addr='$addr'
+delete network.lnfallback
+EOF
+	[ "$2" = "bridge" ] && uci -q batch <<EOF
+set network.lnfallback=interface
+set network.lnfallback.proto='static'
+set network.lnfallback.device='br-lan'
+set network.lnfallback.ipaddr='192.168.2.1'
+set network.lnfallback.netmask='255.255.255.0'
+EOF
+}
+
+svc() {
+	for s in $2; do
+		/etc/init.d/$s "$1" >/dev/null 2>&1 || true
+	done
+}
+
+mesh_peer_addrs() {
+	{
+		ip -6 neigh show dev br-lan 2>/dev/null
+		ip -6 neigh show dev bat0 2>/dev/null
+	} | awk '$1 ~ /^fe80::/ && $0 ~ / router / { sub(/%.*/, "", $1); print $1 }' | sort -u
+}
+
+mesh_controller_alive() {
+	self="$(/usr/sbin/lightnet-macs id 2>/dev/null)"
+	for peer in $(mesh_peer_addrs); do
+		for iface in br-lan bat0; do
+			response="$(curl -g -6 -sS -m 2 --interface "$iface" "http://[$peer]/cgi-bin/lightnet-role" 2>/dev/null)"
+			peer_id="$(printf '%s' "$response" | jsonfilter -e '@.device_id' 2>/dev/null)"
+			[ "$peer_id" = "$self" ] && continue
+			printf '%s' "$response" | grep -q '"active_role"[ ]*:[ ]*"root"' && return 0
+		done
+	done
+	return 1
+}
+
+mesh_controller_should_yield() {
+	self="$(/usr/sbin/lightnet-macs id 2>/dev/null | tr 'A-F' 'a-f')"
+	for peer in $(mesh_peer_addrs); do
+		for iface in br-lan bat0; do
+			response="$(curl -g -6 -sS -m 2 --interface "$iface" "http://[$peer]/cgi-bin/lightnet-role" 2>/dev/null)"
+			peer_id="$(printf '%s' "$response" | jsonfilter -e '@.device_id' 2>/dev/null | tr 'A-F' 'a-f')"
+			peer_role="$(printf '%s' "$response" | jsonfilter -e '@.active_role' 2>/dev/null)"
+			peer_detection="$(printf '%s' "$response" | jsonfilter -e '@.detection' 2>/dev/null)"
+			[ "$peer_role" = "root" ] && [ -n "$peer_id" ] && [ "$peer_id" != "$self" ] || continue
+			case "$peer_detection" in
+				manual|wan-upstream) return 0 ;;
+			esac
+			[ "$(printf '%s\n%s\n' "$self" "$peer_id" | sort | head -n 1)" = "$peer_id" ] && return 0
+		done
+	done
+	return 1
+}
+
+remote_controller_alive() {
+	active="$(state_get active_role)"
+	detection="$(state_get detection)"
+	case "$active:$detection" in
+		root:manual|root:wan-upstream|root:bridge) return 1 ;;
+		root:standalone) mesh_controller_should_yield ;;
+		*) mesh_controller_alive ;;
+	esac
+}
+
+set_base_macs() {
+	[ -f /etc/config/wireless ] || touch /etc/config/wireless
+	wanmac="$(/usr/sbin/lightnet-macs wan)"
+	meshmac="$(/usr/sbin/lightnet-macs mesh)"
+	batmac="$(/usr/sbin/lightnet-macs bat0)"
+	[ -n "$batmac" ] && {
+		uci set network.dev_bat0=device
+		uci set network.dev_bat0.name='bat0'
+		uci set network.dev_bat0.macaddr="$batmac"
+	}
+	[ -n "$meshmac" ] && uci set wireless.mesh0.macaddr="$meshmac"
+	ap1mac="$(/usr/sbin/lightnet-macs ap1)"
+	[ -n "$ap1mac" ] && uci set wireless.default_radio1.macaddr="$ap1mac"
+	[ -n "$wanmac" ] && export LIGHTNET_WAN_MAC="$wanmac"
+}
+
+apply_client_wifi() {
+	mode="$(uci -q get lightnet.wifi.ssid_mode || echo portal)"
+	ssid="$(uci -q get lightnet.wifi.ssid || echo LIGHTNET)"
+	key="$(uci -q get lightnet.wifi.key)"
+	disabled=1
+	enc="none"
+
+	case "$mode" in
+		open|portal)
+			enc="none"
+			key=""
+			;;
+		psk2)
+			enc="psk2"
+			;;
+		psk3|sae)
+			enc="sae"
+			;;
+	esac
+
+	if [ "$mode" != "portal" ] || [ -f /etc/lightnet/portal.ready ] || [ "$(uci -q get lightnet.main.network_mode)" = "bridge" ]; then
+		disabled=0
+	fi
+
+	for iface in default_radio0 default_radio1; do
+		uci set "wireless.$iface.ssid=$ssid"
+		uci set "wireless.$iface.encryption=$enc"
+		uci set "wireless.$iface.disabled=$disabled"
+		if [ -n "$key" ]; then
+			uci set "wireless.$iface.key=$key"
+		else
+			uci -q delete "wireless.$iface.key"
+		fi
+	done
+}
+
+restart_stack() {
+	log "applying network role"
+	/etc/init.d/network restart
+	sleep 3
+	for s in dnsmasq firewall odhcpd; do
+		if /etc/init.d/$s enabled; then
+			/etc/init.d/$s restart >/dev/null 2>&1 || true
+		else
+			/etc/init.d/$s stop >/dev/null 2>&1 || true
+		fi
+	done
+	wifi reload >/dev/null 2>&1 || true
+	# Keep management daemons available even when lan is DHCP-only or pending
+	for s in uhttpd dropbear; do
+		/etc/init.d/$s enabled || /etc/init.d/$s enable >/dev/null 2>&1 || true
+		/etc/init.d/$s start >/dev/null 2>&1 || true
+	done
+}
+
+apply_bridge() {
+	br="$(br_section)"
+	set_base_macs
+	uci -q batch <<EOF
+delete network.@device[$br].ports
+add_list network.@device[$br].ports='lan1'
+add_list network.@device[$br].ports='wan'
+add_list network.@device[$br].ports='bat0'
+set network.lan.proto='dhcp'
+delete network.lan.ipaddr
+delete network.lan.netmask
+delete network.lan.ip6assign
+set dhcp.lan.ignore='1'
+set dhcp.lan.ra='disabled'
+set dhcp.lan.dhcpv6='disabled'
+set network.wan.disabled='1'
+set network.wan6.disabled='1'
+delete network.nwi_wan
+delete network.dev_wan
+set network.nwi_lan2=interface
+set network.nwi_lan2.proto='batadv_hardif'
+set network.nwi_lan2.master='bat0'
+set network.nwi_lan2.device='lan2'
+set network.nwi_lan2.mtu='1532'
+set network.dev_lan2=device
+set network.dev_lan2.name='lan2'
+set network.dev_lan2.macaddr='$LIGHTNET_WAN_MAC'
+EOF
+	set_mgmt root bridge
+	apply_client_wifi
+	uci commit network
+	uci commit wireless
+	uci commit dhcp
+	svc stop "firewall dnsmasq odhcpd opennds"
+	svc disable "firewall dnsmasq odhcpd opennds"
+	state_set active_role root
+	state_set detection bridge
+	restart_stack
+	log "role=root applied in bridge mode"
+}
+
+apply_root() {
+	[ "$(uci -q get lightnet.main.network_mode)" = "bridge" ] && { apply_bridge; return; }
+	br="$(br_section)"
+	set_base_macs
+	uci -q batch <<EOF
+delete network.@device[$br].ports
+add_list network.@device[$br].ports='lan1'
+add_list network.@device[$br].ports='bat0'
+set network.lan.proto='static'
+set network.lan.ipaddr='192.168.2.1'
+set network.lan.netmask='255.255.255.0'
+set network.lan.ip6assign='60'
+delete network.lan.gateway
+delete network.lan.dns
+set dhcp.lan.ignore='0'
+set dhcp.lan.ra='server'
+delete dhcp.lan.dhcpv6
+set network.wan.device='wan'
+set network.wan.proto='dhcp'
+delete network.wan.disabled
+set network.wan6.device='wan'
+set network.wan6.proto='dhcpv6'
+delete network.wan6.disabled
+delete network.nwi_wan
+delete network.dev_wan
+set network.nwi_lan2=interface
+set network.nwi_lan2.proto='batadv_hardif'
+set network.nwi_lan2.master='bat0'
+set network.nwi_lan2.device='lan2'
+set network.nwi_lan2.mtu='1532'
+set network.dev_lan2=device
+set network.dev_lan2.name='lan2'
+set network.dev_lan2.macaddr='$LIGHTNET_WAN_MAC'
+EOF
+	set_mgmt root
+	apply_client_wifi
+	uci commit network
+	uci commit wireless
+	uci commit dhcp
+	svc enable "firewall dnsmasq odhcpd"
+	state_set active_role root
+	case "$1" in
+		manual) state_set detection manual ;;
+		standalone) state_set detection standalone ;;
+		*) state_set detection wan-upstream ;;
+	esac
+	restart_stack
+	log "role=root applied"
+}
+
+apply_agent() {
+	br="$(br_section)"
+	set_base_macs
+	uci -q batch <<EOF
+delete network.@device[$br].ports
+add_list network.@device[$br].ports='lan1'
+add_list network.@device[$br].ports='lan2'
+add_list network.@device[$br].ports='bat0'
+set network.lan.proto='dhcp'
+delete network.lan.ipaddr
+delete network.lan.netmask
+delete network.lan.ip6assign
+set dhcp.lan.ignore='1'
+set dhcp.lan.ra='disabled'
+set dhcp.lan.dhcpv6='disabled'
+set network.wan.disabled='1'
+set network.wan6.disabled='1'
+delete network.nwi_lan2
+delete network.dev_lan2
+set network.nwi_wan=interface
+set network.nwi_wan.proto='batadv_hardif'
+set network.nwi_wan.master='bat0'
+set network.nwi_wan.device='wan'
+set network.nwi_wan.mtu='1532'
+set network.dev_wan=device
+set network.dev_wan.name='wan'
+set network.dev_wan.macaddr='$LIGHTNET_WAN_MAC'
+EOF
+	wifi_off=1
+	[ "$(uci -q get lightnet.main.adopted)" = "1" ] && wifi_off=0
+	uci set wireless.default_radio0.disabled="$wifi_off"
+	uci set wireless.default_radio1.disabled="$wifi_off"
+	set_mgmt agent
+	uci commit network
+	uci commit wireless
+	uci commit dhcp
+	svc stop "firewall dnsmasq odhcpd opennds"
+	svc disable "firewall dnsmasq odhcpd opennds"
+	state_set active_role agent
+	state_set detection "$1"
+	restart_stack
+	log "role=agent applied via $2"
+}
+
+apply_detect() {
+	br="$(br_section)"
+	set_base_macs
+	uci -q batch <<EOF
+delete network.@device[$br].ports
+add_list network.@device[$br].ports='lan1'
+add_list network.@device[$br].ports='lan2'
+add_list network.@device[$br].ports='bat0'
+set network.lan.proto='static'
+set network.lan.ipaddr='192.168.1.1'
+set network.lan.netmask='255.255.255.0'
+delete network.lan.ip6assign
+set dhcp.lan.ignore='1'
+set network.wan.device='wan'
+set network.wan.proto='dhcp'
+delete network.wan.disabled
+set network.wan6.device='wan'
+set network.wan6.proto='dhcpv6'
+delete network.wan6.disabled
+delete network.nwi_lan2
+delete network.dev_lan2
+delete network.nwi_wan
+delete network.dev_wan
+set wireless.default_radio0.disabled='1'
+set wireless.default_radio1.disabled='1'
+EOF
+	set_mgmt agent
+	uci commit network
+	uci commit wireless
+	uci commit dhcp
+	svc disable odhcpd
+	state_set active_role detect
+	state_set detection none
+	restart_stack
+	log "role=detect; waiting for app selection or controller"
+}
+
+probe_ipv4() {
+	base="$(/usr/sbin/lightnet-macs id 2>/dev/null)"
+	last="${base##*:}"
+	last="${last:-00}"
+	suffix=$((200 + (0x$last % 50)))
+	echo "192.168.2.$suffix"
+}
+
+probe_cleanup() {
+	old="$(cat /tmp/lightnet-probe.ip 2>/dev/null)"
+	[ -n "$old" ] && ip addr del "$old/24" dev br-lan 2>/dev/null || true
+	rm -f /tmp/lightnet-probe.ip
+}
+
+try_agent_dhcp() {
+	state_set detection controller-discovery
+	ip="$(probe_ipv4)"
+	ip addr add "$ip/24" dev br-lan 2>/dev/null || true
+	ip route replace 192.168.2.0/24 dev br-lan src "$ip" metric 10 2>/dev/null || true
+	echo "$ip" > /tmp/lightnet-probe.ip
+	end=$(( $(date +%s) + DETECT_WAIT ))
+	while [ "$(date +%s)" -lt "$end" ]; do
+		controller_alive && return 0
+		remote_controller_alive && return 0
+		sleep 2
+	done
+	probe_cleanup
+	return 1
+}
+
+if [ "$1" = "apply-wifi" ]; then
+	[ "$(sed -n 's/^active_role=//p' /etc/lightnet/state 2>/dev/null | tail -n1)" = "root" ] || exit 0
+	apply_client_wifi
+	uci commit wireless
+	wifi reload >/dev/null 2>&1
+	log "client wifi profile applied"
+	exit 0
+fi
+
+if [ "$1" = "probe-controller" ]; then
+	remote_controller_alive
+	exit $?
+fi
+
+case "$1" in
+	root|agent|detect)
+		CONFIGURED_ROLE="$1"
+		;;
+	*)
+		CONFIGURED_ROLE="${CONFIGURED_ROLE:-auto}"
+		;;
+esac
+
+if [ "$CONFIGURED_ROLE" = "root" ]; then
+	apply_root manual
+	exit 0
+fi
+
+if [ "$CONFIGURED_ROLE" = "agent" ]; then
+	apply_agent manual
+	exit 0
+fi
+
+if [ "$CONFIGURED_ROLE" = "detect" ]; then
+	apply_detect
+	exit 0
+fi
+
+if [ "$1" = "boot" ] && [ "$(state_get active_role)" = "agent" ] && [ "$(uci -q get lightnet.main.adopted)" = "1" ]; then
+	log "adopted satellite; keeping agent role"
+	exit 0
+fi
+
+if [ "$(uci -q get lightnet.main.network_mode)" != "bridge" ] && [ "$(cat /sys/class/net/wan/carrier 2>/dev/null)" = "1" ]; then
+	wan_wait=0
+	while [ -z "$(wan_ipv4)" ] && [ "$wan_wait" -lt 25 ]; do sleep 1; wan_wait=$((wan_wait + 1)); done
+	wip="$(wan_ipv4)"
+	case "$wip" in
+		""|192.168.1.*|192.168.2.*) ;;
+		*) apply_root wan-upstream; exit 0 ;;
+	esac
+fi
+
+remote_controller_alive && { apply_agent mesh-controller; exit 0; }
+
+wip="$(wan_ipv4)"
+case "$wip" in
+	192.168.2.*)
+		controller_alive && { apply_agent wan-controller; exit 0; }
+		state_set detection ambiguous-management-subnet
+		apply_detect
+		exit 0
+		;;
+esac
+
+try_agent_dhcp && { apply_agent mesh-controller; exit 0; }
+wip="$(wan_ipv4)"
+[ -n "$wip" ] && [ "${wip#192.168.1.}" = "$wip" ] && apply_root auto || apply_root standalone
+exit 0

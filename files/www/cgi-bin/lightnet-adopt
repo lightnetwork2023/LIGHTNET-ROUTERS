@@ -1,0 +1,50 @@
+#!/bin/sh
+printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+/usr/sbin/lightnet-admin-auth || { printf '{"ok":false,"error":"authentication required"}\n'; exit 0; }
+body="$(head -c "${CONTENT_LENGTH:-4096}" 2>/dev/null)"
+mac="$(printf '%s' "$body" | tr -d '{} \n\t' | sed -n 's/.*"mac":"\([^"]*\)".*/\1/p')"
+action="$(printf '%s' "$body" | tr -d '{} \n\t' | sed -n 's/.*"action":"\([^"]*\)".*/\1/p')"
+case "$mac" in
+	??:??:??:??:??:??) ;;
+	*) printf '{"ok":false,"error":"invalid mac"}\n'; exit 0 ;;
+esac
+mac="$(printf '%s' "$mac" | tr 'A-F' 'a-f' | tr -cd '0-9a-f:')"
+hostname="$(jsonfilter -i "/etc/lightnet/inform/$mac.json" -e '@.hostname' 2>/dev/null)"
+[ -z "$hostname" ] && hostname="q20-$(printf '%s' "$mac" | awk -F: '{print $5 $6}')"
+
+if [ "$action" = "rename" ]; then
+	name="$(printf '%s' "$body" | tr -d '\n\t' | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | tr -cd "A-Za-z0-9 ._'-" | sed 's/^ *//; s/ *$//' | cut -c1-32)"
+	mkdir -p /etc/lightnet/names
+	if [ -n "$name" ]; then
+		printf '%s\n' "$name" >"/etc/lightnet/names/$mac"
+	else
+		rm -f "/etc/lightnet/names/$mac"
+	fi
+	printf '{"ok":true,"renamed":true,"name":"%s"}\n' "$name"
+	exit 0
+fi
+
+if [ "$action" = "remove" ]; then
+	sed -i "/^$mac$/d" /etc/lightnet/adopted.list 2>/dev/null
+	rm -f "/etc/lightnet/names/$mac" "/etc/lightnet/rejected/$mac"
+	mkdir -p /tmp/lightnet-cmd
+	echo reset >"/tmp/lightnet-cmd/$mac"
+	logger -t lightnet "removed $mac; factory reset queued"
+	printf '{"ok":true,"removed":true,"hostname":"%s"}\n' "$hostname"
+	exit 0
+fi
+
+if [ "$action" = "reject" ]; then
+	boot_id="$(jsonfilter -i "/etc/lightnet/inform/$mac.json" -e '@.boot_id' 2>/dev/null | tr -cd '0-9a-f-')"
+	[ -n "$boot_id" ] || { printf '{"ok":false,"error":"device has not reported a boot id yet"}\n'; exit 0; }
+	mkdir -p /etc/lightnet/rejected
+	printf '%s\n' "$boot_id" >"/etc/lightnet/rejected/$mac"
+	sed -i "/^$mac$/d" /etc/lightnet/adopted.list 2>/dev/null
+	logger -t lightnet "rejected $mac until it restarts"
+	printf '{"ok":true,"rejected":true,"hostname":"%s"}\n' "$hostname"
+	exit 0
+fi
+
+rm -f "/etc/lightnet/rejected/$mac"
+grep -qi "^$mac$" /etc/lightnet/adopted.list 2>/dev/null || echo "$mac" >>/etc/lightnet/adopted.list
+printf '{"ok":true,"adopted":true,"hostname":"%s","config_url":"/cgi-bin/lightnet-config?mac=%s"}\n' "$hostname" "$mac"

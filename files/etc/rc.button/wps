@@ -1,0 +1,3 @@
+#!/bin/sh
+logger -t lightnet "WPS button ignored: disabled for mesh safety"
+exit 0

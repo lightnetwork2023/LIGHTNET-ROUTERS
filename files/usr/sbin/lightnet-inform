@@ -1,0 +1,115 @@
+#!/bin/sh
+
+[ -f /tmp/lightnet-rejected ] && exit 0
+boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)"
+controller="$(uci -q get lightnet.main.controller || echo 192.168.2.1)"
+role="$(sed -n 's/^active_role=//p' /etc/lightnet/state 2>/dev/null | tail -n1)"
+adopted="$(uci -q get lightnet.main.adopted || echo 0)"
+hostname="$(uci -q get system.@system[0].hostname || cat /proc/sys/kernel/hostname)"
+mac="$(/usr/sbin/lightnet-macs id 2>/dev/null || cat /sys/class/net/lan1/address 2>/dev/null)"
+ip="$(ubus call network.interface.lan status 2>/dev/null | jsonfilter -e '@["ipv4-address"][0].address' 2>/dev/null)"
+uptime="$(cut -d' ' -f1 /proc/uptime | cut -d. -f1)"
+wired="$(cat /sys/class/net/wan/carrier 2>/dev/null || echo 0)"
+meshsta="$(iw dev mesh0 station dump 2>/dev/null | grep -c '^Station')"
+signal="$(iw dev mesh0 station dump 2>/dev/null | sed -n 's/.*signal:[[:space:]]*\([-0-9]*\).*/\1/p' | head -n1)"
+wired_backhaul=0
+wireless_backhaul=0
+for iface in $(batctl n 2>/dev/null | tail -n +3 | awk '{print $1}'); do
+	[ "$iface" = "mesh0" ] && wireless_backhaul=1 || wired_backhaul=1
+done
+if [ "$wired_backhaul" = 1 ] && [ "$wireless_backhaul" = 1 ]; then
+	backhaul="wired+wireless"
+elif [ "$wired_backhaul" = 1 ]; then
+	backhaul="wired"
+elif [ "$wireless_backhaul" = 1 ]; then
+	backhaul="wireless"
+else
+	backhaul="unknown"
+fi
+clients=0
+for i in phy0-ap0 phy1-ap0; do
+	n="$(iw dev "$i" station dump 2>/dev/null | grep -c '^Station')"
+	clients=$((clients + ${n:-0}))
+done
+macs_in() { grep -io '[0-9a-f]\{2\}\(:[0-9a-f]\{2\}\)\{5\}' | tr 'A-F' 'a-f'; }
+uplink_mac=""; uplink_iface=""; uplink_tq=0; uplink_signal=""; uplink_rate=""
+cmac="$(ip neigh show "$controller" dev br-lan 2>/dev/null | macs_in | head -n1)"
+[ -z "$cmac" ] && cmac="$(ip -6 neigh show fd4c:6e65:7400::1 2>/dev/null | macs_in | head -n1)"
+if [ -n "$cmac" ]; then
+	corig="$(batctl tg -H 2>/dev/null | grep '^ *\*' | grep -i " $cmac " | head -n1 | macs_in | sed -n 2p)"
+	if [ -n "$corig" ]; then
+		oline="$(batctl o -H 2>/dev/null | grep '^ *\*' | grep -i " $corig " | head -n1)"
+		uplink_mac="$(printf '%s' "$oline" | macs_in | sed -n 2p)"
+		uplink_iface="$(printf '%s' "$oline" | sed -n 's/.*\[ *\([^] ]*\) *\].*/\1/p')"
+		uplink_tq="$(printf '%s' "$oline" | sed -n 's/.*( *\([0-9]*\)).*/\1/p')"
+		if [ "$uplink_iface" = "mesh0" ] && [ -n "$uplink_mac" ]; then
+			st="$(iw dev mesh0 station get "$uplink_mac" 2>/dev/null)"
+			uplink_signal="$(printf '%s\n' "$st" | sed -n 's/^[[:space:]]*signal:[[:space:]]*\([-0-9]*\).*/\1/p' | head -n1)"
+			tx="$(printf '%s\n' "$st" | sed -n 's/^[[:space:]]*tx bitrate:[[:space:]]*\([0-9]*\).*/\1/p' | head -n1)"
+			rx="$(printf '%s\n' "$st" | sed -n 's/^[[:space:]]*rx bitrate:[[:space:]]*\([0-9]*\).*/\1/p' | head -n1)"
+			uplink_rate="${tx:-0}"; [ "${rx:-0}" -gt "$uplink_rate" ] && uplink_rate="$rx"
+			[ "$uplink_rate" = 0 ] && uplink_rate=""
+		fi
+	fi
+fi
+model="$(cat /tmp/sysinfo/model 2>/dev/null || echo Q20)"
+firmware="LightNet-Q20-test"
+token="$(cat /etc/lightnet/device.token 2>/dev/null)"
+
+[ "$role" != "agent" ] && exit 0
+
+json=$(printf '{"device_id":"%s","onboarding_token":"%s","board":"jcg,q20-pb-boot","model":"%s","firmware":"%s","hostname":"%s","ip":"%s","role":"agent","state":"%s","wired_carrier":%s,"wired_backhaul":%s,"wireless_backhaul":%s,"backhaul":"%s","mesh_established":%s,"mesh_signal_dbm":%s,"uptime":%s,"boot_id":"%s","clients":%s,"uplink_mac":"%s","uplink_iface":"%s","uplink_tq":%s,"uplink_signal_dbm":%s,"uplink_rate_mbit":%s}' \
+	"$mac" "$token" "$model" "$firmware" "$hostname" "$ip" "$( [ "$adopted" = 1 ] && echo adopted || echo pending )" "${wired:-0}" "$wired_backhaul" "$wireless_backhaul" "$backhaul" "${meshsta:-0}" "${signal:-null}" "${uptime:-0}" "$boot_id" "$clients" \
+	"$uplink_mac" "$uplink_iface" "${uplink_tq:-0}" "${uplink_signal:-null}" "${uplink_rate:-null}")
+
+response=""
+for c in "[fd4c:6e65:7400::1]" "$controller"; do
+	response="$(wget -q -T 5 -t 1 -O- --header='Content-Type: application/json' --header="X-LightNet-Device: $mac" --post-data="$json" "http://$c/cgi-bin/lightnet-inform" 2>/dev/null)"
+	[ -n "$response" ] && { controller="$c"; break; }
+done
+[ -n "$response" ] || exit 0
+
+if printf '%s' "$response" | grep -q '"rejected"[ ]*:[ ]*true'; then
+	touch /tmp/lightnet-rejected
+	logger -t lightnet "adoption rejected by controller; leaving mesh until reboot"
+	batctl if del mesh0 >/dev/null 2>&1
+	ip link set mesh0 down 2>/dev/null
+	exit 0
+fi
+
+if [ "$adopted" = 1 ] && printf '%s' "$response" | grep -q '"command"[ ]*:[ ]*"reset"'; then
+	logger -t lightnet "removed by controller; factory reset"
+	( sleep 2; firstboot -y; sync; reboot ) >/dev/null 2>&1 </dev/null &
+	exit 0
+fi
+
+if [ "$adopted" = 1 ] && printf '%s' "$response" | grep -q '"command"[ ]*:[ ]*"reboot"'; then
+	logger -t lightnet "restart requested by controller"
+	( sleep 2; reboot ) >/dev/null 2>&1 </dev/null &
+	exit 0
+fi
+
+wget -q -T 5 -O /tmp/lightnet-config.json "http://$controller/cgi-bin/lightnet-config?mac=$mac&token=$token" 2>/dev/null
+if [ "$adopted" = 1 ] && grep -q '"state"[ ]*:[ ]*"pending"' /tmp/lightnet-config.json 2>/dev/null; then
+	uci set lightnet.main.adopted='0'
+	uci set wireless.default_radio0.disabled='1'
+	uci set wireless.default_radio1.disabled='1'
+	uci -q delete lightnet.wifi.applied_version
+	uci commit lightnet
+	uci commit wireless
+	sed -i 's/^adopted=.*/adopted=0/' /etc/lightnet/state
+	wifi reload >/dev/null 2>&1
+	logger -t lightnet "adoption revoked by controller"
+fi
+if grep -q '"adopted"[ ]*:[ ]*true' /tmp/lightnet-config.json 2>/dev/null; then
+	newver="$(jsonfilter -i /tmp/lightnet-config.json -e '@.config_version' 2>/dev/null)"
+	oldver="$(uci -q get lightnet.wifi.applied_version)"
+	if [ "$newver" != "$oldver" ]; then
+		/usr/sbin/lightnet-apply-profile /tmp/lightnet-config.json && {
+			[ -n "$newver" ] && uci set lightnet.wifi.applied_version="$newver"
+			uci commit lightnet
+		}
+	fi
+fi
+
+exit 0

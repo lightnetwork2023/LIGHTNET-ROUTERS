@@ -1,0 +1,42 @@
+#!/bin/sh
+
+what="$1"
+base=""
+for dev in lan1 wan eth0; do
+	[ -r "/sys/class/net/$dev/address" ] || continue
+	candidate="$(cat "/sys/class/net/$dev/address")"
+	case "$candidate" in
+		??:??:??:??:??:??) base="$candidate"; break ;;
+	esac
+done
+
+[ -z "$base" ] && base="$(cat /sys/class/net/br-lan/address 2>/dev/null)"
+
+OIFS="$IFS"
+IFS=':'
+set -- $base
+IFS="$OIFS"
+
+[ $# -ne 6 ] && exit 1
+
+case "$what" in
+	id|base)
+		printf '%s\n' "$base"
+		exit 0 ;;
+esac
+
+last=$((0x$6))
+case "$what" in
+	wan|lan2)
+		off=4 ;;
+	mesh|mesh0)
+		off=5 ;;
+	bat0)
+		off=6 ;;
+	ap1|radio1)
+		off=7 ;;
+	*)
+		exit 1 ;;
+esac
+
+printf '02:%s:%s:%s:%s:%02x\n' "$2" "$3" "$4" "$5" $(( (last + off) & 255 ))

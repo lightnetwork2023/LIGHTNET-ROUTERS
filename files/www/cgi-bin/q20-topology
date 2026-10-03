@@ -1,0 +1,145 @@
+#!/bin/sh
+STATE=/tmp/q20-topology-lastseen
+NOW=$(date +%s)
+TMP=$STATE.new
+: >"$TMP"
+
+printf "Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n"
+/usr/sbin/lightnet-admin-auth || { printf '{"ok":false,"error":"authentication required"}\n'; exit 0; }
+
+BATN=$(batctl n 2>/dev/null)
+MESHSTA=$(iw dev mesh0 station dump 2>/dev/null)
+FIRST=1
+SEEN='|'
+
+derive_mac() {
+	mac="$1"; off="$2"
+	OIFS="$IFS"; IFS=':'; set -- $mac; IFS="$OIFS"
+	[ $# -eq 6 ] || return 1
+	last=$((0x$6))
+	printf '02:%s:%s:%s:%s:%02x' "$2" "$3" "$4" "$5" $(( (last + off) & 255 ))
+}
+
+safe() { printf '%s' "$1" | tr -cd 'A-Za-z0-9._:@-'; }
+num() { v="$(printf '%s' "$1" | tr -cd '0-9.-')"; [ -n "$v" ] && printf '%s' "$v" || printf '%s' "$2"; }
+UPL_MAC=""; UPL_IF=""; UPL_TQ=""; UPL_SIG=""; UPL_RATE=""
+
+last_seen_get() { awk -F'|' -v n="$1" '$1==n {print $2}' "$STATE" 2>/dev/null | tail -n 1; }
+
+emit_node() {
+	NAME="$(safe "$1")"
+	IP="$(safe "$2")"
+	LANMAC="$(printf '%s' "$(safe "$3")" | tr 'A-F' 'a-f')"
+	ROLE="$(safe "$4")"
+	WMAC="$(printf '%s' "$(safe "$5")" | tr 'A-F' 'a-f')"
+	MMAC="$(printf '%s' "$(safe "$6")" | tr 'A-F' 'a-f')"
+	ADOPTED="${7:-0}"
+	SELF_NODE="${8:-0}"
+	CLIENTS="$(printf '%s' "${9:-0}" | tr -cd '0-9')"
+
+	[ -n "$NAME" ] || return
+	ONLINE=0
+	SSH=0
+	if [ "$SELF_NODE" = 1 ] || [ "$ROLE" = "main" ]; then
+		ONLINE=1
+		SSH=1
+	else
+		seen="$(date -r "/tmp/lightnet-seen/$LANMAC" +%s 2>/dev/null)"
+		if [ -n "$seen" ] && [ $((NOW - seen)) -le 45 ]; then
+			ONLINE=1
+		else
+			[ -n "$IP" ] && ping -c 1 -W 1 "$IP" >/dev/null 2>&1 && ONLINE=1
+		fi
+		SSH=$ONLINE
+	fi
+
+	LAST="$(last_seen_get "$NAME")"
+	[ "$ONLINE" = 1 ] && LAST="$NOW"
+	printf '%s|%s\n' "$NAME" "${LAST:-0}" >>"$TMP"
+
+	WIRED=0
+	WIRELESS=0
+	MESH_UP=0
+	SIGNAL=""
+	RXRATE=""
+	PATH_TEXT="offline"
+
+	if [ "$SELF_NODE" = 1 ] || [ "$ROLE" = "main" ]; then
+		PATH_TEXT="local"
+	else
+		printf '%s\n' "$BATN" | grep -qi "$WMAC" && WIRED=1
+		printf '%s\n' "$BATN" | grep -qi "$MMAC" && WIRELESS=1
+		if [ "$WIRED" = 1 ] && [ "$WIRELESS" = 1 ]; then
+			PATH_TEXT="wired+wireless"
+		elif [ "$WIRED" = 1 ]; then
+			PATH_TEXT="wired"
+		elif [ "$WIRELESS" = 1 ]; then
+			PATH_TEXT="wireless"
+		elif [ "$ONLINE" = 1 ]; then
+			PATH_TEXT="unknown"
+		fi
+
+		if printf '%s\n' "$MESHSTA" | grep -qi "Station $MMAC"; then
+			MESH_UP=1
+			SIGNAL=$(printf '%s\n' "$MESHSTA" | sed -n "/Station $MMAC/,/^Station /p" | sed -n "s/.*signal:[[:space:]]*\([-0-9]*\).*/\1/p" | head -n 1)
+			RXRATE=$(printf '%s\n' "$MESHSTA" | sed -n "/Station $MMAC/,/^Station /p" | sed -n "s/.*rx bitrate:[[:space:]]*\([0-9.]*\).*/\1/p" | head -n 1)
+		fi
+	fi
+
+	[ "$FIRST" = 0 ] && printf ','
+	FIRST=0
+	SIGJSON=${SIGNAL:-null}
+	RXJSON=${RXRATE:-null}
+	[ -n "$LAST" ] && [ "$LAST" != 0 ] && LASTJSON="$LAST" || LASTJSON=null
+	ALIAS="$(head -n1 "/etc/lightnet/names/$LANMAC" 2>/dev/null | tr -cd "A-Za-z0-9 ._'-")"
+	printf '{"uplink_mac":"%s","uplink_iface":"%s","uplink_tq":%s,"uplink_signal_dbm":%s,"uplink_rate_mbit":%s,' \
+		"$(safe "$UPL_MAC" | tr 'A-F' 'a-f')" "$(safe "$UPL_IF")" "$(num "$UPL_TQ" 0)" "$(num "$UPL_SIG" null)" "$(num "$UPL_RATE" null)"
+	printf '"name":"%s","hostname":"%s","ip":"%s","mac":"%s","role":"%s","adopted":%s,"online":%s,"ssh":%s,"path":"%s","wired":%s,"wireless":%s,"mesh_established":%s,"mesh_signal_dbm":%s,"mesh_rx_mbit":%s,"last_seen":%s,"clients":%s}' \
+		"$ALIAS" "$NAME" "$IP" "$LANMAC" "$ROLE" "$ADOPTED" "$ONLINE" "$SSH" "$PATH_TEXT" "$WIRED" "$WIRELESS" "$MESH_UP" "$SIGJSON" "$RXJSON" "$LASTJSON" "${CLIENTS:-0}"
+	SEEN="$SEEN$LANMAC|"
+}
+
+printf '{"generated":%s,"nodes":[' "$NOW"
+
+SELF_NAME="$(uci -q get system.@system[0].hostname || cat /proc/sys/kernel/hostname)"
+SELF_IP="$(ubus call network.interface.lan status 2>/dev/null | jsonfilter -e '@["ipv4-address"][0].address' 2>/dev/null)"
+SELF_MAC="$(/usr/sbin/lightnet-macs id 2>/dev/null | tr 'A-F' 'a-f')"
+SELF_ACTIVE="$(sed -n 's/^active_role=//p' /etc/lightnet/state 2>/dev/null | tail -n1)"
+case "$SELF_ACTIVE" in
+	root) SELF_ROLE=main ;;
+	agent) SELF_ROLE=satellite ;;
+	*) SELF_ROLE="${SELF_ACTIVE:-detect}" ;;
+esac
+SELF_CLIENTS=0
+for i in phy0-ap0 phy1-ap0; do
+	n="$(iw dev "$i" station dump 2>/dev/null | grep -c '^Station')"
+	SELF_CLIENTS=$((SELF_CLIENTS + ${n:-0}))
+done
+emit_node "$SELF_NAME" "$SELF_IP" "$SELF_MAC" "$SELF_ROLE" "$(derive_mac "$SELF_MAC" 4)" "$(derive_mac "$SELF_MAC" 5)" 1 1 "$SELF_CLIENTS"
+
+while IFS='|' read -r NAME IP LANMAC ROLE WMAC MMAC; do
+	[ -n "$NAME" ] || continue
+	case "$NAME" in \#*) continue ;; esac
+	emit_node "$NAME" "$IP" "$LANMAC" "$ROLE" "$WMAC" "$MMAC" 1
+done </etc/q20-topology.conf
+
+for f in /etc/lightnet/inform/*.json; do
+	[ -f "$f" ] || continue
+	mac="$(jsonfilter -i "$f" -e '@.device_id' 2>/dev/null | tr 'A-F' 'a-f')"
+	case "$mac" in ??:??:??:??:??:??) ;; *) continue ;; esac
+	case "$SEEN" in *"|$mac|"*) continue ;; esac
+	[ -f "/etc/lightnet/rejected/$mac" ] && continue
+	hostname="$(jsonfilter -i "$f" -e '@.hostname' 2>/dev/null)"
+	ip="$(jsonfilter -i "$f" -e '@.ip' 2>/dev/null)"
+	adopted=0
+	grep -qi "^$mac$" /etc/lightnet/adopted.list 2>/dev/null && adopted=1
+	UPL_MAC="$(jsonfilter -i "$f" -e '@.uplink_mac' 2>/dev/null)"
+	UPL_IF="$(jsonfilter -i "$f" -e '@.uplink_iface' 2>/dev/null)"
+	UPL_TQ="$(jsonfilter -i "$f" -e '@.uplink_tq' 2>/dev/null)"
+	UPL_SIG="$(jsonfilter -i "$f" -e '@.uplink_signal_dbm' 2>/dev/null)"
+	UPL_RATE="$(jsonfilter -i "$f" -e '@.uplink_rate_mbit' 2>/dev/null)"
+	emit_node "${hostname:-q20-pending}" "$ip" "$mac" "satellite" "$(derive_mac "$mac" 4)" "$(derive_mac "$mac" 5)" "$adopted" 0 "$(jsonfilter -i "$f" -e '@.clients' 2>/dev/null)"
+done
+
+printf ']}'
+mv "$TMP" "$STATE" 2>/dev/null || true

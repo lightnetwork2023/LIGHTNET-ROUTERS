@@ -1,0 +1,56 @@
+#!/bin/sh
+
+PROFILE="$1"
+[ -s "$PROFILE" ] || exit 1
+[ -f /etc/config/wireless ] || touch /etc/config/wireless
+jsonfilter -i "$PROFILE" -e '@.adopted' 2>/dev/null | grep -q 'true' || exit 0
+
+hostname="$(jsonfilter -i "$PROFILE" -e '@.hostname' 2>/dev/null)"
+ssid="$(jsonfilter -i "$PROFILE" -e '@.wifi.ssid' 2>/dev/null)"
+mode="$(jsonfilter -i "$PROFILE" -e '@.wifi.mode' 2>/dev/null)"
+key="$(jsonfilter -i "$PROFILE" -e '@.wifi.key' 2>/dev/null)"
+version="$(jsonfilter -i "$PROFILE" -e '@.config_version' 2>/dev/null)"
+portal_ready="$(jsonfilter -i "$PROFILE" -e '@.portal_ready' 2>/dev/null)"
+
+[ -n "$hostname" ] && uci set system.@system[0].hostname="$hostname"
+[ -n "$ssid" ] && uci set lightnet.wifi.ssid="$ssid"
+[ -n "$mode" ] && uci set lightnet.wifi.ssid_mode="$mode"
+[ -n "$key" ] && uci set lightnet.wifi.key="$key" || uci -q delete lightnet.wifi.key
+[ -n "$version" ] && uci set lightnet.wifi.config_version="$version"
+
+enc='none'
+case "$mode" in
+	psk2) enc='psk2' ;;
+	psk3|sae) enc='sae' ;;
+	*) enc='none'; uci -q delete lightnet.wifi.key ;;
+esac
+
+disabled=0
+[ "$mode" = "portal" ] && [ "$portal_ready" != "true" ] && disabled=1
+for iface in default_radio0 default_radio1; do
+	uci set "wireless.$iface.network=lan"
+	uci set "wireless.$iface.mode=ap"
+	[ -n "$ssid" ] && uci set "wireless.$iface.ssid=$ssid"
+	uci set "wireless.$iface.encryption=$enc"
+	uci set "wireless.$iface.disabled=$disabled"
+	if [ -n "$key" ] && [ "$enc" != "none" ]; then
+		uci set "wireless.$iface.key=$key"
+	else
+		uci -q delete "wireless.$iface.key"
+	fi
+done
+
+uci set lightnet.main.adopted='1'
+uci set dhcp.lan.ignore='1'
+uci commit system
+uci commit lightnet
+uci commit wireless
+uci commit dhcp
+
+grep -q '^adopted=' /etc/lightnet/state 2>/dev/null && sed -i 's/^adopted=.*/adopted=1/' /etc/lightnet/state || echo adopted=1 >>/etc/lightnet/state
+
+/etc/init.d/dnsmasq stop >/dev/null 2>&1 || true
+/etc/init.d/firewall stop >/dev/null 2>&1 || true
+wifi reload >/dev/null 2>&1 || true
+logger -t lightnet "adopted profile applied"
+exit 0

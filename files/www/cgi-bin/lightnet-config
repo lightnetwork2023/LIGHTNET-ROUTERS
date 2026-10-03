@@ -1,0 +1,26 @@
+#!/bin/sh
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\r\n' ' '; }
+printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+mac="$(printf '%s' "$QUERY_STRING" | sed -n 's/.*mac=\([0-9A-Fa-f:]*\).*/\1/p')"
+token="$(printf '%s' "$QUERY_STRING" | sed -n 's/.*token=\([A-Za-z0-9]*\).*/\1/p')"
+case "$mac" in
+	??:??:??:??:??:??) ;;
+	*) printf '{"adopted":false}\n'; exit 0 ;;
+esac
+mac="$(printf '%s' "$mac" | tr 'A-F' 'a-f')"
+[ -n "$token" ] && [ -s "/etc/lightnet/inform/$mac.token" ] || { printf '{"adopted":false,"error":"invalid token"}\n'; exit 0; }
+stored_token="$(cat "/etc/lightnet/inform/$mac.token" 2>/dev/null)"
+[ "$token" = "$stored_token" ] || { printf '{"adopted":false,"error":"invalid token"}\n'; exit 0; }
+grep -qi "^$mac$" /etc/lightnet/adopted.list 2>/dev/null || { printf '{"adopted":false,"state":"pending"}\n'; exit 0; }
+hostname="$(jsonfilter -i "/etc/lightnet/inform/$mac.json" -e '@.hostname' 2>/dev/null)"
+ip="$(jsonfilter -i "/etc/lightnet/inform/$mac.json" -e '@.ip' 2>/dev/null)"
+[ -z "$hostname" ] && hostname="q20-$(printf '%s' "$mac" | awk -F: '{print $5 $6}')"
+ssid="$(uci -q get lightnet.wifi.ssid || echo LIGHTNET)"
+mode="$(uci -q get lightnet.wifi.ssid_mode || echo open)"
+key="$(uci -q get lightnet.wifi.key)"
+enc="$(uci -q get lightnet.wifi.encryption || echo none)"
+ver="$(uci -q get lightnet.wifi.config_version || echo 1)"
+portal_ready=false
+{ [ -f /etc/lightnet/portal.ready ] || [ "$(uci -q get lightnet.main.network_mode)" = "bridge" ]; } && portal_ready=true
+printf '{"adopted":true,"config_version":%s,"hostname":"%s","management_ip":"%s","gateway":"%s","portal_ready":%s,"wifi":{"ssid":"%s","mode":"%s","encryption":"%s","key":"%s"},"bridge":true,"dhcp":false,"nat":false}\n' \
+	"$ver" "$(json_escape "$hostname")" "$ip" "$(json_escape "$(uci -q get lightnet.main.controller || echo 192.168.2.1)")" "$portal_ready" "$(json_escape "$ssid")" "$(json_escape "$mode")" "$(json_escape "$enc")" "$(json_escape "$key")"

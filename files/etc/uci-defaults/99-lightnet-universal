@@ -1,0 +1,133 @@
+#!/bin/sh
+
+. /lib/functions.sh
+
+lanmac=""
+for dev in lan1 wan eth0; do
+	[ -r "/sys/class/net/$dev/address" ] && lanmac="$(cat "/sys/class/net/$dev/address")" && break
+done
+
+[ -z "$lanmac" ] && lanmac="$(cat /sys/class/net/br-lan/address 2>/dev/null)"
+suffix="$(echo "$lanmac" | awk -F: '{print $5 $6}' | tr 'A-F' 'a-f')"
+[ -n "$suffix" ] && uci set system.@system[0].hostname="q20-$suffix"
+
+wanmac="$(/usr/sbin/lightnet-macs wan)"
+meshmac="$(/usr/sbin/lightnet-macs mesh)"
+batmac="$(/usr/sbin/lightnet-macs bat0)"
+meshkey="$(cat /etc/lightnet/mesh.key 2>/dev/null)"
+
+if [ ! -s /etc/lightnet/device.token ]; then
+	cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' > /etc/lightnet/device.token
+	chmod 600 /etc/lightnet/device.token 2>/dev/null || true
+fi
+
+if [ ! -f /etc/config/wireless ]; then
+	wifi config >/etc/config/wireless 2>/dev/null || true
+	[ -f /etc/config/wireless ] || touch /etc/config/wireless
+fi
+
+uci batch <<'EOF'
+set network.bat0=interface
+set network.bat0.proto='batadv'
+set network.bat0.routing_algo='BATMAN_IV'
+set network.bat0.aggregated_ogms='1'
+set network.bat0.ap_isolation='0'
+set network.bat0.bonding='0'
+set network.bat0.fragmentation='1'
+set network.bat0.gw_mode='off'
+set network.bat0.orig_interval='1000'
+set network.bat0.bridge_loop_avoidance='1'
+set network.bat0.distributed_arp_table='1'
+set network.bat0.multicast_mode='1'
+set network.bat0.network_coding='0'
+set network.bat0.hop_penalty='30'
+set network.nwi_mesh0=interface
+set network.nwi_mesh0.proto='batadv_hardif'
+set network.nwi_mesh0.master='bat0'
+set network.nwi_mesh0.mtu='2304'
+set network.dev_bat0=device
+set network.dev_bat0.name='bat0'
+set wireless.mesh0=wifi-iface
+set wireless.mesh0.device='radio1'
+set wireless.mesh0.ifname='mesh0'
+set wireless.mesh0.network='nwi_mesh0'
+set wireless.mesh0.mode='mesh'
+set wireless.mesh0.mesh_id='LIGHTNET-MESH'
+set wireless.mesh0.encryption='sae'
+set wireless.mesh0.mesh_fwding='0'
+set wireless.default_radio0=wifi-iface
+set wireless.default_radio0.device='radio0'
+set wireless.default_radio0.network='lan'
+set wireless.default_radio0.mode='ap'
+set wireless.default_radio0.ssid='LIGHTNET'
+set wireless.default_radio0.encryption='none'
+set wireless.default_radio0.disabled='1'
+set wireless.default_radio1=wifi-iface
+set wireless.default_radio1.device='radio1'
+set wireless.default_radio1.network='lan'
+set wireless.default_radio1.mode='ap'
+set wireless.default_radio1.ssid='LIGHTNET'
+set wireless.default_radio1.encryption='none'
+set wireless.default_radio1.disabled='1'
+set wireless.radio0.disabled='0'
+set wireless.radio0.channel='6'
+set wireless.radio0.htmode='HE20'
+set wireless.radio0.country='CN'
+set wireless.radio1.disabled='0'
+set wireless.radio1.channel='36'
+set wireless.radio1.htmode='HE80'
+set wireless.radio1.country='CN'
+EOF
+
+idhex="$(/usr/sbin/lightnet-macs id 2>/dev/null | tr -d ':')"
+if [ -n "$idhex" ]; then
+	uci set network.lnmgmt=interface
+	uci set network.lnmgmt.proto='static'
+	uci set network.lnmgmt.device='br-lan'
+	uci -q delete network.lnmgmt.ip6addr
+	uci add_list network.lnmgmt.ip6addr="fd4c:6e65:7400::5:$(echo "$idhex" | cut -c7-10):$(echo "$idhex" | cut -c11-12)/64"
+fi
+[ -n "$batmac" ] && uci set network.dev_bat0.macaddr="$batmac"
+[ -n "$meshmac" ] && uci set wireless.mesh0.macaddr="$meshmac"
+ap1mac="$(/usr/sbin/lightnet-macs ap1)"
+[ -n "$ap1mac" ] && uci set wireless.default_radio1.macaddr="$ap1mac"
+[ -n "$meshkey" ] && uci set wireless.mesh0.key="$meshkey"
+
+if uci -q get network.@device[0].name | grep -q '^br-lan$'; then
+	uci -q get network.@device[0].ports | grep -qw bat0 || uci add_list network.@device[0].ports='bat0'
+fi
+
+cat > /etc/lightnet/state <<'EOF'
+role=auto
+active_role=detect
+adopted=0
+controller=192.168.2.1
+detection=none
+EOF
+
+uci commit lightnet
+uci commit network
+uci commit wireless
+uci commit system
+
+uci -q get luci.themes >/dev/null || uci set luci.themes=internal
+uci set luci.themes.LightNet='/luci-static/lightnet'
+uci set luci.main.mediaurlbase='/luci-static/lightnet'
+uci commit luci 2>/dev/null || true
+/etc/init.d/lightnet-agent enable >/dev/null 2>&1 || true
+uci -q delete dropbear.@dropbear[0].Interface && uci commit dropbear
+LN_PASS_HASH='$5$IFY.T3JvKMqcPnq0$rbStwzeUgvP.QXXZgxHAc3I19KDDV2XIEl3B96flsXD'
+sed -i "s|^root:[^:]*:|root:$LN_PASS_HASH:|" /etc/shadow
+uci -q delete rpcd.lightnet
+uci set rpcd.lightnet=login
+uci set rpcd.lightnet.username='LIGHTNET'
+uci set rpcd.lightnet.password="$LN_PASS_HASH"
+uci add_list rpcd.lightnet.read='*'
+uci add_list rpcd.lightnet.write='*'
+uci commit rpcd
+uci set uhttpd.main.max_requests='6'
+uci commit uhttpd
+/etc/init.d/dropbear enable >/dev/null 2>&1 || true
+/etc/init.d/uhttpd enable >/dev/null 2>&1 || true
+/etc/init.d/opennds disable >/dev/null 2>&1 || true
+exit 0

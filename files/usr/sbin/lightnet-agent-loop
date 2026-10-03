@@ -1,0 +1,44 @@
+#!/bin/sh
+
+sleep 15
+/usr/sbin/lightnet-apply-role boot >/dev/null 2>&1 || true
+
+last_detect=0
+lost=0
+while :; do
+	now=$(date +%s)
+	configured="$(uci -q get lightnet.main.role || echo auto)"
+	active="$(sed -n 's/^active_role=//p' /etc/lightnet/state 2>/dev/null | tail -n1)"
+	detection="$(sed -n 's/^detection=//p' /etc/lightnet/state 2>/dev/null | tail -n1)"
+
+	if [ "$configured" = "auto" ] && [ "$active" != "root" ] && [ "$active" != "agent" ] && [ $((now - last_detect)) -ge 60 ]; then
+		/usr/sbin/lightnet-apply-role auto >/dev/null 2>&1 || true
+		last_detect=$now
+	elif [ "$configured" = "auto" ] && [ "$active" = "root" ] && [ "$detection" = "standalone" ] && [ $((now - last_detect)) -ge 30 ]; then
+		if batctl n 2>/dev/null | tail -n +3 | grep -q . && /usr/sbin/lightnet-apply-role probe-controller; then
+			/usr/sbin/lightnet-apply-role auto >/dev/null 2>&1 || true
+		fi
+		last_detect=$now
+	elif [ "$configured" = "auto" ] && [ "$active" = "agent" ] && [ ! -f /tmp/lightnet-rejected ] && [ "$(uci -q get lightnet.main.adopted)" != "1" ]; then
+		# Unadopted satellite with no reachable controller: re-detect so the mesh never ends up without a root
+		if /usr/sbin/lightnet-apply-role probe-controller || wget -q -T 2 -t 1 -O- http://192.168.2.1/cgi-bin/lightnet-role 2>/dev/null | grep -q '"active_role"[ ]*:[ ]*"root"'; then
+			lost=0
+		else
+			lost=$((lost + 1))
+			[ "$lost" -ge 6 ] && { logger -t lightnet "no controller for 90s; re-running auto detect"; /usr/sbin/lightnet-apply-role auto >/dev/null 2>&1 || true; lost=0; last_detect=$now; }
+		fi
+	fi
+
+	if [ "$detection" = "bridge" ] && ubus call network.interface.lnfallback status 2>/dev/null | grep -q '"up": true'; then
+		case "$(ubus call network.interface.lan status 2>/dev/null | jsonfilter -e '@["ipv4-address"][0].address' 2>/dev/null)" in
+			192.168.2.*)
+				ifdown lnfallback
+				logger -t lightnet "upstream uses 192.168.2.0/24; fallback 192.168.2.1 disabled"
+				;;
+		esac
+	fi
+
+	active="$(sed -n 's/^active_role=//p' /etc/lightnet/state 2>/dev/null | tail -n1)"
+	[ "$active" = "agent" ] && /usr/sbin/lightnet-inform >/dev/null 2>&1 || true
+	sleep 15
+done

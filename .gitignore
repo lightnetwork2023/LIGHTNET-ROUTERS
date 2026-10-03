@@ -1,0 +1,5 @@
+images/
+bin/
+*.o
+*.orig
+*.rej

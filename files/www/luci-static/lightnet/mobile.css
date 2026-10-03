@@ -1,0 +1,6 @@
+@import url('/luci-static/bootstrap/mobile.css?v=git-24.086.46634-1ffe078');
+
+header { position: static; flex-wrap: wrap; padding: .4rem .8rem; }
+.lightnet-brand img { height: 2rem; }
+.lightnet-mode-toggle { margin: .4rem; }
+#maincontent.container { padding-left: .8rem; padding-right: .8rem; }

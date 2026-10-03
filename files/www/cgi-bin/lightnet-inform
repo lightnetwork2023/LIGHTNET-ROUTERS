@@ -1,0 +1,59 @@
+#!/bin/sh
+printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+mkdir -p /etc/lightnet/inform
+body="$(head -c "${CONTENT_LENGTH:-8192}" 2>/dev/null)"
+mac="$(printf '%s' "$body" | tr -d '{} \n\t' | sed -n 's/.*"device_id":"\([^"]*\)".*/\1/p')"
+[ -z "$mac" ] && mac="$(printf '%s' "$HTTP_X_LIGHTNET_DEVICE" | tr 'A-F' 'a-f')"
+case "$mac" in
+	??:??:??:??:??:??) ;;
+	*) printf '{"ok":false,"error":"invalid device_id"}\n'; exit 0 ;;
+esac
+macfile="$(printf '%s' "$mac" | tr 'A-F' 'a-f' | tr -cd '0-9a-f:')"
+boot_id="$(printf '%s' "$body" | tr -d '{} \n\t' | sed -n 's/.*"boot_id":"\([^"]*\)".*/\1/p' | tr -cd '0-9a-f-')"
+if [ -f "/etc/lightnet/rejected/$macfile" ]; then
+	if [ -n "$boot_id" ] && [ "$(cat "/etc/lightnet/rejected/$macfile")" = "$boot_id" ]; then
+		printf '{"ok":true,"device_id":"%s","adopted":0,"rejected":true}\n' "$macfile"
+		exit 0
+	fi
+	rm -f "/etc/lightnet/rejected/$macfile"
+fi
+token="$(printf '%s' "$body" | tr -d '{} \n\t' | sed -n 's/.*"onboarding_token":"\([^"]*\)".*/\1/p' | tr -cd 'A-Za-z0-9')"
+[ -n "$token" ] && printf '%s\n' "$token" > "/etc/lightnet/inform/$macfile.token"
+printf '%s\n' "$body" | sed 's/"onboarding_token"[[:space:]]*:[[:space:]]*"[^"]*"/"onboarding_token":"stored"/' > "/etc/lightnet/inform/$macfile.json"
+mkdir -p /tmp/lightnet-seen && touch "/tmp/lightnet-seen/$macfile"
+
+derive_mac() {
+	mac="$1"; off="$2"
+	OIFS="$IFS"; IFS=':'; set -- $mac; IFS="$OIFS"
+	[ $# -eq 6 ] || return 1
+	printf '02:%s:%s:%s:%s:%02x' "$2" "$3" "$4" "$5" $(( (0x$6 + off) & 255 ))
+}
+
+wmac="$(derive_mac "$macfile" 4)"
+mmac="$(derive_mac "$macfile" 5)"
+wired=0
+wireless=0
+batctl n 2>/dev/null | awk -v mac="$wmac" 'NR > 2 && tolower($2) == mac && $1 != "mesh0" { found=1 } END { exit !found }' && wired=1
+batctl n 2>/dev/null | awk -v mac="$mmac" 'NR > 2 && tolower($2) == mac && $1 == "mesh0" { found=1 } END { exit !found }' && wireless=1
+
+pending_cmd="$(head -n1 "/tmp/lightnet-cmd/$macfile" 2>/dev/null | tr -cd 'a-z')"
+adopted=0
+grep -qi "^$macfile$" /etc/lightnet/adopted.list 2>/dev/null && adopted=1
+if [ "$wired" = 1 ] && [ "$adopted" = 0 ] && [ "$pending_cmd" != "reset" ]; then
+	echo "$macfile" >>/etc/lightnet/adopted.list
+	adopted=1
+fi
+
+backhaul="pending-wireless"
+[ "$wired" = 1 ] && [ "$wireless" = 1 ] && backhaul="wired+wireless"
+[ "$wired" = 1 ] && [ "$wireless" = 0 ] && backhaul="wired"
+[ "$wired" = 0 ] && [ "$wireless" = 1 ] && backhaul="wireless"
+
+command=""
+if [ -n "$pending_cmd" ] && { [ "$adopted" = 1 ] || [ "$pending_cmd" = "reset" ]; }; then
+	command="$pending_cmd"
+	rm -f "/tmp/lightnet-cmd/$macfile"
+	[ "$command" = "reset" ] && rm -f "/etc/lightnet/inform/$macfile.json" "/etc/lightnet/inform/$macfile.token" "/tmp/lightnet-seen/$macfile"
+	logger -t lightnet "sent '$command' to $macfile"
+fi
+printf '{"ok":true,"device_id":"%s","adopted":%s,"backhaul":"%s","command":"%s"}\n' "$macfile" "$adopted" "$backhaul" "$command"

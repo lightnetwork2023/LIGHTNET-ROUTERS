@@ -1,0 +1,38 @@
+#!/bin/sh
+printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+/usr/sbin/lightnet-admin-auth || { printf '{"ok":false,"error":"authentication required"}\n'; exit 0; }
+body="$(head -c "${CONTENT_LENGTH:-4096}" 2>/dev/null)"
+action="$(printf '%s' "$body" | tr -d '{} \n\t' | sed -n 's/.*"action":"\([^"]*\)".*/\1/p')"
+mac="$(printf '%s' "$body" | tr -d '{} \n\t' | sed -n 's/.*"mac":"\([^"]*\)".*/\1/p' | tr 'A-F' 'a-f' | tr -cd '0-9a-f:')"
+self="$(/usr/sbin/lightnet-macs id 2>/dev/null | tr 'A-F' 'a-f')"
+if [ "$action" = "restart" ] && [ -n "$mac" ] && [ "$mac" != "$self" ]; then
+	case "$mac" in ??:??:??:??:??:??) ;; *) printf '{"ok":false,"error":"invalid mac"}\n'; exit 0 ;; esac
+	grep -qi "^$mac$" /etc/lightnet/adopted.list 2>/dev/null || { printf '{"ok":false,"error":"only approved access points can be restarted"}\n'; exit 0; }
+	mkdir -p /tmp/lightnet-cmd
+	echo reboot >"/tmp/lightnet-cmd/$mac"
+	logger -t lightnet "restart queued for $mac"
+	printf '{"ok":true,"action":"restart","queued":true}\n'
+	exit 0
+fi
+[ "$action" = "restart" ] && action=reboot
+case "$action" in
+	reboot)
+		printf '{"ok":true,"action":"reboot"}\n'
+		( sleep 1; reboot ) >/dev/null 2>&1 &
+		;;
+	reload-network)
+		/etc/init.d/network restart >/dev/null 2>&1 &
+		printf '{"ok":true,"action":"reload-network"}\n'
+		;;
+	reload-wifi)
+		wifi reload >/dev/null 2>&1 &
+		printf '{"ok":true,"action":"reload-wifi"}\n'
+		;;
+	inform)
+		/usr/sbin/lightnet-inform >/dev/null 2>&1 &
+		printf '{"ok":true,"action":"inform"}\n'
+		;;
+	*)
+		printf '{"ok":false,"error":"unsupported action"}\n'
+		;;
+esac

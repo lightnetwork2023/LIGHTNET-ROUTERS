@@ -1,0 +1,42 @@
+#!/bin/sh
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\r\n' ' '; }
+printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+/usr/sbin/lightnet-admin-auth || { printf '{"ok":false,"error":"authentication required"}\n'; exit 0; }
+state_get() { sed -n "s/^$1=//p" /etc/lightnet/state 2>/dev/null | tail -n1; }
+lanip="$(ubus call network.interface.lan status 2>/dev/null | jsonfilter -e '@["ipv4-address"][0].address' 2>/dev/null)"
+wanip="$(ubus call network.interface.wan status 2>/dev/null | jsonfilter -e '@["ipv4-address"][0].address' 2>/dev/null)"
+gateway="$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}')"
+wanlink=0; [ "$(cat /sys/class/net/wan/carrier 2>/dev/null)" = "1" ] && wanlink=1
+lanproto="$(uci -q get network.lan.proto 2>/dev/null)"
+upstreamip=""
+[ "$lanproto" = "dhcp" ] && upstreamip="$(ubus call network.interface.lan status 2>/dev/null | jsonfilter -e '@["ipv4-address"][0].address' 2>/dev/null)"
+meshsta="$(iw dev mesh0 station dump 2>/dev/null | grep -c '^Station')"
+batn="$(batctl n 2>/dev/null | tail -n +3 | grep -c .)"
+clients=0
+for i in phy0-ap0 phy1-ap0; do
+	n="$(iw dev "$i" station dump 2>/dev/null | grep -c '^Station')"
+	clients=$((clients + ${n:-0}))
+done
+check_online() { ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1 && echo 1 >/tmp/lightnet-online.tmp || echo 0 >/tmp/lightnet-online.tmp; mv /tmp/lightnet-online.tmp /tmp/lightnet-online; }
+age=$(( $(date +%s) - $(date -r /tmp/lightnet-online +%s 2>/dev/null || echo 0) ))
+if [ ! -f /tmp/lightnet-online ]; then
+	check_online
+elif [ "$age" -gt 20 ]; then
+	( check_online ) >/dev/null 2>&1 </dev/null &
+fi
+online="$(cat /tmp/lightnet-online 2>/dev/null)"
+online="${online:-0}"
+wgup="$(ip link show wg0 2>/dev/null | grep -c 'state UP')"
+portal=0; [ -f /etc/lightnet/portal.ready ] && portal=1
+fallback=0; ubus call network.interface.lnfallback status 2>/dev/null | grep -q '"up": true' && fallback=1
+printf '{"company":"%s","device_id":"%s","hostname":"%s","role":"%s","active_role":"%s","network_mode":"%s","detection":"%s","lan_ip":"%s","wan_ip":"%s","wan_link":%s,"lan_proto":"%s","upstream_ip":"%s","gateway":"%s","internet":%s,"fallback_ip":%s,"mesh_peers":%s,"batman_neighbors":%s,"clients":%s,"wireguard_up":%s,"portal_ready":%s,"adopted":%s,"uptime":%s}\n' \
+	"$(json_escape "$(uci -q get lightnet.main.company || echo 'LIGHTNETWORK SOLUTION')")" \
+	"$(json_escape "$(/usr/sbin/lightnet-macs id 2>/dev/null)")" \
+	"$(json_escape "$(uci -q get system.@system[0].hostname || cat /proc/sys/kernel/hostname)")" \
+	"$(json_escape "$(uci -q get lightnet.main.role || echo auto)")" \
+	"$(json_escape "$(state_get active_role || echo detect)")" \
+	"$(json_escape "$(uci -q get lightnet.main.network_mode || echo router)")" \
+	"$(json_escape "$(state_get detection || echo none)")" \
+	"$(json_escape "$lanip")" "$(json_escape "$wanip")" "$wanlink" "$(json_escape "$lanproto")" "$(json_escape "$upstreamip")" "$(json_escape "$gateway")" "$online" "$fallback" \
+	"${meshsta:-0}" "${batn:-0}" "$clients" "${wgup:-0}" "$portal" \
+	"$(uci -q get lightnet.main.adopted || echo 0)" "$(cut -d. -f1 /proc/uptime)"

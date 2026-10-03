@@ -1,0 +1,41 @@
+#!/bin/sh
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\r\n' ' '; }
+
+printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+state_get() { sed -n "s/^$1=//p" /etc/lightnet/state 2>/dev/null | tail -n1; }
+
+if [ "$REQUEST_METHOD" = "POST" ]; then
+	/usr/sbin/lightnet-admin-auth || { printf '{"ok":false,"error":"authentication required"}\n'; exit 0; }
+	body="$(head -c "${CONTENT_LENGTH:-0}" 2>/dev/null)"
+	role="$(printf '%s' "$body" | tr -d '{} \n\t' | sed -n 's/.*"role":"\([^"]*\)".*/\1/p')"
+	case "$role" in
+		auto|root|agent|bridge)
+			apply="$role"
+			if [ "$role" = "bridge" ]; then
+				uci set lightnet.main.network_mode='bridge'
+				apply=root
+			else
+				uci set lightnet.main.network_mode='router'
+			fi
+			uci set lightnet.main.role="$apply"
+			uci commit lightnet
+			( (sleep 1; /usr/sbin/lightnet-apply-role "$apply") >/dev/null 2>&1 </dev/null & )
+			printf '{"ok":true,"requested_role":"%s"}\n' "$role"
+			exit 0
+			;;
+		*)
+			printf '{"ok":false,"error":"role must be auto, root, bridge, or agent"}\n'
+			exit 0
+			;;
+	esac
+fi
+
+printf '{"company":"%s","device_id":"%s","role":"%s","active_role":"%s","network_mode":"%s","adopted":%s,"controller":"%s","detection":"%s"}\n' \
+	"$(json_escape "$(uci -q get lightnet.main.company || echo 'LIGHTNETWORK SOLUTION')")" \
+	"$(json_escape "$(/usr/sbin/lightnet-macs id 2>/dev/null)")" \
+	"$(json_escape "$(uci -q get lightnet.main.role || echo auto)")" \
+	"$(json_escape "$(state_get active_role || echo detect)")" \
+	"$(json_escape "$(uci -q get lightnet.main.network_mode || echo router)")" \
+	"$(uci -q get lightnet.main.adopted || echo 0)" \
+	"$(json_escape "$(uci -q get lightnet.main.controller || echo 192.168.2.1)")" \
+	"$(json_escape "$(state_get detection || echo none)")"
