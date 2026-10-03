@@ -155,6 +155,11 @@ start() {
 	log "chilli failed to start"; return 1
 }
 
+running() { [ -s "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null; }
+
+# start only if not already running (boot path may be triggered by several callers)
+ensure() { running && return 0; start; }
+
 stop() {
 	[ -s "$PID" ] && kill "$(cat "$PID")" 2>/dev/null
 	killall chilli 2>/dev/null
@@ -177,9 +182,11 @@ case "$1" in
 	net) [ "$2" = "on" ] && net_on || net_off ;;
 	fw) [ "$2" = "on" ] && fw_on || fw_off ;;
 	start) start ;;
+	ensure) ensure ;;
+	running) running ;;
 	stop) stop ;;
 	restart) start ;;
 	status) status ;;
 	authorize) chilli_query -s "$SOCK" authorize mac "$2" ;;
-	*) echo "usage: $0 net on|off | fw on|off | start | stop | status | authorize MAC"; exit 1 ;;
+	*) echo "usage: $0 net on|off | fw on|off | start | ensure | running | stop | status | authorize MAC"; exit 1 ;;
 esac

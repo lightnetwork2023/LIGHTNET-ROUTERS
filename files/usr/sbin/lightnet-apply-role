@@ -201,7 +201,7 @@ restart_stack() {
 	done
 	# Hotspot (CoovaChilli) follows the role: runs on root only, after the bridges exist
 	if [ -s /etc/lightnet/server.json ]; then
-		( sleep 5; /usr/sbin/lightnet-hotspot start ) >/dev/null 2>&1 &
+		( sleep 5; /usr/sbin/lightnet-hotspot ensure ) >/dev/null 2>&1 &
 	fi
 }
 
