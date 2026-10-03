@@ -22,5 +22,6 @@ enc="$(uci -q get lightnet.wifi.encryption || echo none)"
 ver="$(uci -q get lightnet.wifi.config_version || echo 1)"
 portal_ready=false
 { [ -f /etc/lightnet/portal.ready ] || [ "$(uci -q get lightnet.main.network_mode)" = "bridge" ]; } && portal_ready=true
-printf '{"adopted":true,"config_version":%s,"hostname":"%s","management_ip":"%s","gateway":"%s","portal_ready":%s,"wifi":{"ssid":"%s","mode":"%s","encryption":"%s","key":"%s"},"bridge":true,"dhcp":false,"nat":false}\n' \
-	"$ver" "$(json_escape "$hostname")" "$ip" "$(json_escape "$(uci -q get lightnet.main.controller || echo 192.168.2.1)")" "$portal_ready" "$(json_escape "$ssid")" "$(json_escape "$mode")" "$(json_escape "$enc")" "$(json_escape "$key")"
+hotspot=false; [ -s /etc/lightnet/server.json ] && [ "$(uci -q get lightnet.cloud.status)" = "provisioned" ] && hotspot=true
+printf '{"adopted":true,"config_version":%s,"hostname":"%s","management_ip":"%s","gateway":"%s","portal_ready":%s,"hotspot":%s,"wifi":{"ssid":"%s","mode":"%s","encryption":"%s","key":"%s"},"bridge":true,"dhcp":false,"nat":false}\n' \
+	"$ver" "$(json_escape "$hostname")" "$ip" "$(json_escape "$(uci -q get lightnet.main.controller || echo 192.168.2.1)")" "$portal_ready" "$hotspot" "$(json_escape "$ssid")" "$(json_escape "$mode")" "$(json_escape "$enc")" "$(json_escape "$key")"

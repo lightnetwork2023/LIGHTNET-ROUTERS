@@ -78,9 +78,31 @@ return view.extend({
 		else
 			internet = ln.stat('bridge', 'Controller', s.internet ? 'Online' : 'Linked', s.gateway ? 'via ' + s.gateway : 'Main router', s.internet ? 'violet' : 'warn');
 
+		var cloud = s.cloud || null, cloudStat = null;
+		if (key === 'router' && cloud) {
+			var hs = cloud.hotspot || {};
+			var cs = cloud.status || 'unenrolled', tone = 'warn', val = 'Not linked', sub = cloud.url || '';
+			if (!cloud.enabled) { val = 'Disabled'; sub = 'Cloud link turned off'; tone = ''; }
+			else if (cs === 'provisioned') {
+				val = 'Linked';
+				sub = 'Site ' + (cloud.site_id || '?') + (cloud.site_name ? ' \u00b7 ' + cloud.site_name : '') + ' \u00b7 NAS ' + (cloud.wg_ip || '');
+				tone = (cloud.wg_up && cloud.wg_handshake_age != null && cloud.wg_handshake_age < 180) ? 'good' : 'warn';
+				if (tone === 'warn') sub += ' \u00b7 tunnel down';
+				else if (hs.running) sub += ' \u00b7 hotspot ' + (hs.authorized || 0) + ' online';
+				else sub += ' \u00b7 hotspot stopped';
+			}
+			else if (cs === 'pending') { val = 'Registered'; sub = 'Waiting for assignment on ' + (cloud.url || 'server').replace(/^https?:\/\//, '') + (cloud.router_id ? ' (router #' + cloud.router_id + ')' : ''); }
+			else if (cs === 'rejected' || cs === 'blocked') { val = cs.charAt(0).toUpperCase() + cs.slice(1); sub = 'Contact LightNet support'; }
+			else if (cloud.last_error) { sub = cloud.last_error; }
+			else if (!s.internet) { sub = 'Needs Internet on WAN to register'; }
+			else { sub = 'Registering with ' + (cloud.url || 'server').replace(/^https?:\/\//, '') + '\u2026'; }
+			cloudStat = ln.stat('globe', 'LightNet server', val, sub, tone);
+		}
+
 		return E('div', { 'class': 'ln' }, [
 			ln.errors([ s, topo, pend ]),
 			this.hero(s),
+			cloudStat ? E('div', { 'class': 'ln-stats' }, [ cloudStat ]) : E('span'),
 			E('div', {}, pending.map(function(n) { return ln.pendingBanner(n); })),
 			E('div', { 'class': 'ln-stats' }, [
 				internet,

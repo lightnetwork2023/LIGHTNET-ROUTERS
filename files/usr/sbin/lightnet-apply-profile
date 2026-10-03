@@ -27,8 +27,16 @@ esac
 
 disabled=0
 [ "$mode" = "portal" ] && [ "$portal_ready" != "true" ] && disabled=1
+hotspot="$(jsonfilter -i "$PROFILE" -e '@.hotspot' 2>/dev/null)"
+if [ "$hotspot" = "true" ]; then
+	/usr/sbin/lightnet-hotspot net on
+	client_net=hotspot
+else
+	[ -n "$(uci -q get network.hotspot)" ] && /usr/sbin/lightnet-hotspot net off
+	client_net=lan
+fi
 for iface in default_radio0 default_radio1; do
-	uci set "wireless.$iface.network=lan"
+	uci set "wireless.$iface.network=$client_net"
 	uci set "wireless.$iface.mode=ap"
 	[ -n "$ssid" ] && uci set "wireless.$iface.ssid=$ssid"
 	uci set "wireless.$iface.encryption=$enc"
@@ -51,6 +59,7 @@ grep -q '^adopted=' /etc/lightnet/state 2>/dev/null && sed -i 's/^adopted=.*/ado
 
 /etc/init.d/dnsmasq stop >/dev/null 2>&1 || true
 /etc/init.d/firewall stop >/dev/null 2>&1 || true
+[ "$hotspot" = "true" ] && { /etc/init.d/network reload >/dev/null 2>&1 || true; sleep 2; }
 wifi reload >/dev/null 2>&1 || true
 logger -t lightnet "adopted profile applied"
 exit 0

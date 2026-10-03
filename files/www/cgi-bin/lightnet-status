@@ -29,7 +29,8 @@ online="${online:-0}"
 wgup="$(ip link show wg0 2>/dev/null | grep -c 'state UP')"
 portal=0; [ -f /etc/lightnet/portal.ready ] && portal=1
 fallback=0; ubus call network.interface.lnfallback status 2>/dev/null | grep -q '"up": true' && fallback=1
-printf '{"company":"%s","device_id":"%s","hostname":"%s","role":"%s","active_role":"%s","network_mode":"%s","detection":"%s","lan_ip":"%s","wan_ip":"%s","wan_link":%s,"lan_proto":"%s","upstream_ip":"%s","gateway":"%s","internet":%s,"fallback_ip":%s,"mesh_peers":%s,"batman_neighbors":%s,"clients":%s,"wireguard_up":%s,"portal_ready":%s,"adopted":%s,"uptime":%s}\n' \
+cloud="$(/usr/sbin/lightnet-cloud status 2>/dev/null)"; [ -n "$cloud" ] || cloud='null'
+printf '{"company":"%s","device_id":"%s","hostname":"%s","role":"%s","active_role":"%s","network_mode":"%s","detection":"%s","lan_ip":"%s","wan_ip":"%s","wan_link":%s,"lan_proto":"%s","upstream_ip":"%s","gateway":"%s","internet":%s,"fallback_ip":%s,"mesh_peers":%s,"batman_neighbors":%s,"clients":%s,"wireguard_up":%s,"portal_ready":%s,"adopted":%s,"uptime":%s,"cloud":'"$cloud"'}\n' \
 	"$(json_escape "$(uci -q get lightnet.main.company || echo 'LIGHTNETWORK SOLUTION')")" \
 	"$(json_escape "$(/usr/sbin/lightnet-macs id 2>/dev/null)")" \
 	"$(json_escape "$(uci -q get system.@system[0].hostname || cat /proc/sys/kernel/hostname)")" \

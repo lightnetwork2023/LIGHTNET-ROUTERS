@@ -1,0 +1,106 @@
+#!/bin/sh
+# Apply (or clear) the provisioning data received from lightnet-server.
+#   lightnet-provision apply /path/to/provision.json
+#   lightnet-provision clear
+# Creates the WireGuard uplink to the server, the hotspot VLAN, firewall zones,
+# enables the client SSIDs and starts CoovaChilli (root only).
+
+SERVER_JSON=/etc/lightnet/server.json
+WG_KEY=/etc/lightnet/wg.key
+log() { logger -t lightnet-provision "$*"; }
+jget() { jsonfilter -i "$SERVER_JSON" -e "$1" 2>/dev/null; }
+
+wg_on() {
+	addr="$(jget '@.wg.address')"; pub="$(jget '@.wg.server_public_key')"; host="$(jget '@.wg.endpoint')"; port="$(jget '@.wg.port')"
+	[ -n "$addr" ] && [ -n "$pub" ] && [ -s "$WG_KEY" ] || return 1
+	uci -q batch <<EOF
+delete network.wgln
+set network.wgln=interface
+set network.wgln.proto='wireguard'
+set network.wgln.private_key='$(cat "$WG_KEY")'
+add_list network.wgln.addresses='$addr'
+set network.wgln.mtu='$(jget '@.wg.mtu')'
+delete network.wgln_server
+set network.wgln_server=wireguard_wgln
+set network.wgln_server.description='lightnet-server'
+set network.wgln_server.public_key='$pub'
+set network.wgln_server.endpoint_host='$host'
+set network.wgln_server.endpoint_port='$port'
+set network.wgln_server.persistent_keepalive='$(jget '@.wg.keepalive')'
+set network.wgln_server.route_allowed_ips='1'
+add_list network.wgln_server.allowed_ips='$(jget '@.wg.allowed_ips')'
+delete firewall.ln_wg_zone
+set firewall.ln_wg_zone=zone
+set firewall.ln_wg_zone.name='wgln'
+add_list firewall.ln_wg_zone.network='wgln'
+set firewall.ln_wg_zone.input='ACCEPT'
+set firewall.ln_wg_zone.output='ACCEPT'
+set firewall.ln_wg_zone.forward='REJECT'
+EOF
+	uci commit network; uci commit firewall
+}
+
+wg_off() {
+	uci -q delete network.wgln; uci -q delete network.wgln_server; uci -q delete firewall.ln_wg_zone
+	uci commit network; uci commit firewall
+}
+
+apply() {
+	src="$1"
+	[ -s "$src" ] && jsonfilter -i "$src" -e '@.radius.secret' >/dev/null 2>&1 || { log "invalid provision file"; return 1; }
+	[ "$src" = "$SERVER_JSON" ] || cp "$src" "$SERVER_JSON"
+	chmod 600 "$SERVER_JSON"
+	wg_on || { log "wireguard config failed"; return 1; }
+	/usr/sbin/lightnet-hotspot net on
+	/usr/sbin/lightnet-hotspot fw on
+	ssid="$(jget '@.site.ssid')"
+	uci -q batch <<EOF
+set lightnet.cloud.status='provisioned'
+set lightnet.cloud.site_id='$(jget '@.site.id')'
+set lightnet.cloud.owner_id='$(jget '@.site.owner_id')'
+set lightnet.cloud.wg_ip='$(jget '@.wg.address' | cut -d/ -f1)'
+set lightnet.cloud.site_name='$(jget '@.site.name' | tr -d "'")'
+set lightnet.cloud.provisioned_at='$(date +%s)'
+set lightnet.wifi.ssid_mode='portal'
+set lightnet.wifi.encryption='none'
+set lightnet.wifi.key=''
+set lightnet.wifi.config_version='$(( $(uci -q get lightnet.wifi.config_version || echo 1) + 1 ))'
+EOF
+	[ -n "$ssid" ] && uci set lightnet.wifi.ssid="$ssid"
+	uci commit lightnet
+	touch /etc/lightnet/portal.ready
+	for iface in default_radio0 default_radio1; do
+		uci set "wireless.$iface.disabled=0"; uci set "wireless.$iface.encryption=none"; uci -q delete "wireless.$iface.key"
+		[ -n "$ssid" ] && uci set "wireless.$iface.ssid=$ssid"
+	done
+	uci commit wireless
+	/etc/init.d/network reload >/dev/null 2>&1
+	sleep 3
+	ifup wgln >/dev/null 2>&1
+	/etc/init.d/firewall reload >/dev/null 2>&1
+	wifi reload >/dev/null 2>&1
+	sleep 4
+	/usr/sbin/lightnet-hotspot start
+	log "provisioned: site $(jget '@.site.id') NAS $(jget '@.radius.nas_ip')"
+}
+
+clear_all() {
+	/usr/sbin/lightnet-hotspot stop
+	/usr/sbin/lightnet-hotspot fw off
+	/usr/sbin/lightnet-hotspot net off
+	wg_off
+	rm -f "$SERVER_JSON" /etc/lightnet/portal.ready
+	for o in status site_id owner_id wg_ip site_name provisioned_at router_id; do uci -q delete "lightnet.cloud.$o"; done
+	uci set lightnet.cloud.status='unenrolled'
+	uci commit lightnet
+	/etc/init.d/network reload >/dev/null 2>&1
+	/etc/init.d/firewall reload >/dev/null 2>&1
+	wifi reload >/dev/null 2>&1
+	log "provisioning cleared"
+}
+
+case "$1" in
+	apply) apply "$2" ;;
+	clear) clear_all ;;
+	*) echo "usage: $0 apply FILE | clear"; exit 1 ;;
+esac

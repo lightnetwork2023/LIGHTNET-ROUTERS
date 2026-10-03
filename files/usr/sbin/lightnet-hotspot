@@ -1,0 +1,161 @@
+#!/bin/sh
+# LightNet hotspot (CoovaChilli) on a dedicated VLAN carried over the mesh.
+#   net on|off      create/remove bat0.10 + br-hotspot and move client SSIDs (any role)
+#   start|stop      run/stop chilli from /etc/lightnet/server.json (root only)
+#   status          JSON summary
+#   authorize MAC   authorize a session without the portal (e.g. technician devices)
+
+SERVER_JSON=/etc/lightnet/server.json
+CONF=/var/run/lightnet-chilli.conf
+PID=/var/run/lightnet-chilli.pid
+SOCK=/var/run/lightnet-chilli.sock
+HS_NET=192.168.88.0/24
+HS_GW=192.168.88.1
+VLAN=10
+
+log() { logger -t lightnet-hotspot "$*"; }
+jget() { jsonfilter -i "$SERVER_JSON" -e "$1" 2>/dev/null; }
+
+net_on() {
+	uci -q batch <<EOF
+set network.dev_hs_vlan=device
+set network.dev_hs_vlan.type='8021q'
+set network.dev_hs_vlan.ifname='bat0'
+set network.dev_hs_vlan.vid='$VLAN'
+set network.dev_hs_vlan.name='bat0.$VLAN'
+set network.dev_hs=device
+set network.dev_hs.type='bridge'
+set network.dev_hs.name='br-hotspot'
+delete network.dev_hs.ports
+add_list network.dev_hs.ports='bat0.$VLAN'
+set network.hotspot=interface
+set network.hotspot.device='br-hotspot'
+set network.hotspot.proto='none'
+set network.hotspot.auto='1'
+set wireless.default_radio0.network='hotspot'
+set wireless.default_radio1.network='hotspot'
+EOF
+	uci commit network; uci commit wireless
+}
+
+net_off() {
+	uci -q batch <<EOF
+delete network.hotspot
+delete network.dev_hs
+delete network.dev_hs_vlan
+set wireless.default_radio0.network='lan'
+set wireless.default_radio1.network='lan'
+EOF
+	uci commit network; uci commit wireless
+}
+
+fw_on() {
+	uci -q batch <<EOF
+delete firewall.ln_hs_zone
+set firewall.ln_hs_zone=zone
+set firewall.ln_hs_zone.name='hotspot'
+add_list firewall.ln_hs_zone.device='tun0'
+set firewall.ln_hs_zone.input='REJECT'
+set firewall.ln_hs_zone.output='ACCEPT'
+set firewall.ln_hs_zone.forward='REJECT'
+delete firewall.ln_hs_fwd
+set firewall.ln_hs_fwd=forwarding
+set firewall.ln_hs_fwd.src='hotspot'
+set firewall.ln_hs_fwd.dest='wan'
+delete firewall.ln_hs_uam
+set firewall.ln_hs_uam=rule
+set firewall.ln_hs_uam.name='LightNet hotspot UAM'
+set firewall.ln_hs_uam.src='hotspot'
+set firewall.ln_hs_uam.proto='tcp'
+set firewall.ln_hs_uam.dest_port='3990 3991'
+set firewall.ln_hs_uam.target='ACCEPT'
+delete firewall.ln_hs_icmp
+set firewall.ln_hs_icmp=rule
+set firewall.ln_hs_icmp.name='LightNet hotspot ping'
+set firewall.ln_hs_icmp.src='hotspot'
+set firewall.ln_hs_icmp.proto='icmp'
+set firewall.ln_hs_icmp.target='ACCEPT'
+delete firewall.ln_hs_dns
+set firewall.ln_hs_dns=rule
+set firewall.ln_hs_dns.name='LightNet hotspot DNS'
+set firewall.ln_hs_dns.src='hotspot'
+set firewall.ln_hs_dns.proto='tcp udp'
+set firewall.ln_hs_dns.dest_port='53'
+set firewall.ln_hs_dns.target='ACCEPT'
+EOF
+	uci commit firewall
+}
+
+fw_off() {
+	for s in ln_hs_zone ln_hs_fwd ln_hs_uam ln_hs_icmp ln_hs_dns; do uci -q delete "firewall.$s"; done
+	uci commit firewall
+}
+
+write_conf() {
+	[ -s "$SERVER_JSON" ] || return 1
+	secret="$(jget '@.radius.secret')"; nasip="$(jget '@.radius.nas_ip')"; rserver="$(jget '@.radius.server')"
+	[ -n "$secret" ] && [ -n "$nasip" ] || return 1
+	buy="$(jget '@.portal.buy_url')"
+	hosts="$(jget '@.portal.walled_hosts[*]' | grep -v '^\*' | tr '\n' ',' | sed 's/,$//')"
+	ips="$(jget '@.portal.walled_ips[*]' | tr '\n' ',' | sed 's/,$//')"
+	domains="$(jget '@.portal.walled_hosts[*]' | sed -n 's/^\*//p')"
+	hsmac="$(cat /sys/class/net/br-hotspot/address 2>/dev/null | tr 'a-f:' 'A-F-')"
+	nasid="$(jget '@.radius.nas_id')"; [ -n "$nasid" ] || nasid=LIGHTNET
+	{
+		printf 'cmdsocket %s\nunixipc /var/run/lightnet-chilli.ipc\npidfile %s\n' "$SOCK" "$PID"
+		printf 'tundev tun0\nnet %s\nuamlisten %s\nuamport 3990\nuamuiport 3991\n' "$HS_NET" "$HS_GW"
+		printf 'dhcpif br-hotspot\ndhcpstart 10\ndhcpend 254\nlease 3600\n'
+		printf 'dns1 8.8.8.8\ndns2 1.1.1.1\nuamanydns\n'
+		printf 'uamallowed "%s%s%s"\n' "$hosts" "${ips:+,}" "$ips"
+		for d in $domains; do printf 'uamdomain %s\n' "$d"; done
+		printf 'uamserver "%s"\n' "$buy"
+		printf 'radiusserver1 %s\nradiusserver2 %s\nradiussecret "%s"\n' "$rserver" "$rserver" "$secret"
+		printf 'radiusauthport %s\nradiusacctport %s\n' "$(jget '@.radius.auth_port')" "$(jget '@.radius.acct_port')"
+		printf 'radiusnasid "%s"\nradiusnasip %s\n' "$nasid" "$nasip"
+		[ -n "$hsmac" ] && printf 'nasmac "%s:%s"\n' "$hsmac" "$nasid"
+		printf 'radiuslocationname "%s"\n' "$(jget '@.site.name' | tr -d '"')"
+		printf 'coaport %s\ncoanoipcheck\n' "$(jget '@.radius.coa_port')"
+		printf 'macauth\nmacreauth\nacctupdate\ndefinteriminterval %s\n' "$(jget '@.radius.interim')"
+		printf 'defidletimeout 0\n'
+	} >"$CONF"
+}
+
+start() {
+	[ "$(sed -n 's/^active_role=//p' /etc/lightnet/state 2>/dev/null | tail -n1)" = "root" ] || { log "not root; chilli not started"; return 0; }
+	write_conf || { log "no provisioning data; chilli not started"; return 1; }
+	stop
+	ip link show br-hotspot >/dev/null 2>&1 || { log "br-hotspot missing"; return 1; }
+	/usr/sbin/chilli --conf "$CONF" >/dev/null 2>&1 &
+	sleep 2
+	[ -s "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null && { log "chilli started (NAS $(jget '@.radius.nas_ip'))"; return 0; }
+	log "chilli failed to start"; return 1
+}
+
+stop() {
+	[ -s "$PID" ] && kill "$(cat "$PID")" 2>/dev/null
+	killall chilli 2>/dev/null
+	rm -f "$PID" "$SOCK"
+	ip link del tun0 2>/dev/null
+}
+
+status() {
+	running=false; sessions=0; authed=0
+	if [ -s "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null; then
+		running=true
+		list="$(chilli_query -s "$SOCK" list 2>/dev/null)"
+		sessions=$(printf '%s\n' "$list" | grep -c .)
+		authed=$(printf '%s\n' "$list" | awk '$5==1' | grep -c .)
+	fi
+	printf '{"running":%s,"sessions":%s,"authorized":%s,"gateway":"%s"}\n' "$running" "$sessions" "$authed" "$HS_GW"
+}
+
+case "$1" in
+	net) [ "$2" = "on" ] && net_on || net_off ;;
+	fw) [ "$2" = "on" ] && fw_on || fw_off ;;
+	start) start ;;
+	stop) stop ;;
+	restart) start ;;
+	status) status ;;
+	authorize) chilli_query -s "$SOCK" authorize mac "$2" ;;
+	*) echo "usage: $0 net on|off | fw on|off | start | stop | status | authorize MAC"; exit 1 ;;
+esac

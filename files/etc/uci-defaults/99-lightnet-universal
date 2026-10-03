@@ -115,6 +115,11 @@ uci set luci.themes.LightNet='/luci-static/lightnet'
 uci set luci.main.mediaurlbase='/luci-static/lightnet'
 uci commit luci 2>/dev/null || true
 /etc/init.d/lightnet-agent enable >/dev/null 2>&1 || true
+/etc/init.d/lightnet-cloud enable >/dev/null 2>&1 || true
+/etc/init.d/chilli disable >/dev/null 2>&1 || true
+chmod 600 /etc/lightnet/enroll.key 2>/dev/null || true
+[ -s /etc/lightnet/wg.key ] || { wg genkey >/etc/lightnet/wg.key 2>/dev/null && chmod 600 /etc/lightnet/wg.key; }
+[ -s /etc/lightnet/wg.pub ] || wg pubkey </etc/lightnet/wg.key >/etc/lightnet/wg.pub 2>/dev/null
 uci -q delete dropbear.@dropbear[0].Interface && uci commit dropbear
 LN_PASS_HASH='$5$IFY.T3JvKMqcPnq0$rbStwzeUgvP.QXXZgxHAc3I19KDDV2XIEl3B96flsXD'
 sed -i "s|^root:[^:]*:|root:$LN_PASS_HASH:|" /etc/shadow

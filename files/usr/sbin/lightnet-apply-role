@@ -199,6 +199,10 @@ restart_stack() {
 		/etc/init.d/$s enabled || /etc/init.d/$s enable >/dev/null 2>&1 || true
 		/etc/init.d/$s start >/dev/null 2>&1 || true
 	done
+	# Hotspot (CoovaChilli) follows the role: runs on root only, after the bridges exist
+	if [ -s /etc/lightnet/server.json ]; then
+		( sleep 5; /usr/sbin/lightnet-hotspot start ) >/dev/null 2>&1 &
+	fi
 }
 
 apply_bridge() {

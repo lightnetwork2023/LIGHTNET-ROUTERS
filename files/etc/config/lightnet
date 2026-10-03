@@ -16,3 +16,8 @@ config fleet 'wifi'
 	option radio0_enabled '1'
 	option radio1_enabled '1'
 	option config_version '1'
+
+config cloud 'cloud'
+	option enabled '1'
+	option url 'https://lightnetwork.pro'
+	option status 'unenrolled'
