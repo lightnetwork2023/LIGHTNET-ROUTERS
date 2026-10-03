@@ -8,7 +8,8 @@ ENROLL_KEY=/etc/lightnet/enroll.key
 DEVICE_TOKEN=/etc/lightnet/device.token
 WG_KEY=/etc/lightnet/wg.key
 WG_PUB=/etc/lightnet/wg.pub
-FW_ID=/etc/lightnet/firmware.id
+FW_ID=/rom/etc/lightnet/firmware.id
+[ -s "$FW_ID" ] || FW_ID=/etc/lightnet/firmware.id
 SERVER_JSON=/etc/lightnet/server.json
 STATE=/tmp/lightnet-cloud.state
 log() { logger -t lightnet-cloud "$*"; }

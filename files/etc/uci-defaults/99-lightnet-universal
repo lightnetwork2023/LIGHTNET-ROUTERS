@@ -118,6 +118,9 @@ uci commit luci 2>/dev/null || true
 /etc/init.d/lightnet-cloud enable >/dev/null 2>&1 || true
 /etc/init.d/chilli disable >/dev/null 2>&1 || true
 chmod 600 /etc/lightnet/enroll.key 2>/dev/null || true
+# firmware.id/enroll.key/mesh.key must always be the image's copy; heal keep-lists from older builds
+grep -qx '/etc/lightnet/' /etc/sysupgrade.conf 2>/dev/null && cp /rom/etc/sysupgrade.conf /etc/sysupgrade.conf
+for f in firmware.id enroll.key; do [ -s "/rom/etc/lightnet/$f" ] && cp "/rom/etc/lightnet/$f" "/etc/lightnet/$f"; done
 [ -s /etc/lightnet/wg.key ] || { wg genkey >/etc/lightnet/wg.key 2>/dev/null && chmod 600 /etc/lightnet/wg.key; }
 [ -s /etc/lightnet/wg.pub ] || wg pubkey </etc/lightnet/wg.key >/etc/lightnet/wg.pub 2>/dev/null
 uci -q delete dropbear.@dropbear[0].Interface && uci commit dropbear
