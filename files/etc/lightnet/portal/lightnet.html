@@ -137,9 +137,10 @@
       var p = (v || '').replace(/\D/g, '');
       if (p.startsWith('255')) p = '0' + p.slice(3);
       var pref = p.slice(0, 3);
-      if (['074', '075', '076'].indexOf(pref) >= 0) return 'Mpesa';
-      if (['065', '067', '071'].indexOf(pref) >= 0) return 'Tigo';
-      if (['068', '069'].indexOf(pref) >= 0) return 'Airtel';
+      // TCRA numbering plan 2025: 079 Vodacom, 078 Airtel, 077 Yas (ex-Zantel)
+      if (['074', '075', '076', '079'].indexOf(pref) >= 0) return 'Mpesa';
+      if (['065', '067', '071', '077'].indexOf(pref) >= 0) return 'Tigo';
+      if (['068', '069', '078'].indexOf(pref) >= 0) return 'Airtel';
       if (['061', '062'].indexOf(pref) >= 0) return 'Halopesa';
       return '';
     }
@@ -163,7 +164,7 @@
           $('codeBox').style.display = 'block'; $('codeBox').textContent = p.voucher;
           var href = logonUrl(p.voucher);
           $('paidActions').innerHTML = '<a class="btn" href="' + href + '">Unganisha sasa</a>';
-          setTimeout(function () { location.replace(href); }, 2500);
+          setTimeout(function () { location.replace(href); }, 800);
           return;
         }
         if (p.status === 'pending') {
@@ -186,7 +187,8 @@
         var r = await fetch(API + '/api/buy', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ owner_id: Number(OWNER), site_id: Number(SITE || 0), plan_id: Number($('plan_id').value),
-                                 phone: $('phone').value.trim(), client_mac: MAC })
+                                 phone: $('phone').value.trim(), client_mac: MAC,
+                                 provider: $('provider').value })
         });
         var data = await r.json();
         if (!data.success) throw new Error(data.error || 'Malipo yameshindikana');
@@ -201,8 +203,16 @@
       $('clientMac').textContent = MAC ? 'Kifaa: ' + MAC : '';
       var res = qs('res');
       if (res === 'failed') { notice('Code si sahihi, imeisha muda au inatumika kwenye kifaa kingine.', 'err'); showPane('code'); }
-      else if (res === 'success') { notice('Umeunganishwa! Ingia Internet sasa.', 'ok', '<a class="btn" href="' + (USERURL || 'http://neverssl.com/') + '">Endelea</a>'); }
-      else if (res === 'already') { notice('Tayari umeunganishwa.', 'ok', '<a class="btn" href="' + USERURL + '">Endelea</a>'); }
+      else if (res === 'success' || res === 'already') {
+        // Connected: do not wait for a tap — go to the page the customer wanted. Captive-portal
+        // webviews (iOS CNA / Android) close by themselves once the probe sees the Internet.
+        var go = USERURL || 'http://neverssl.com/';
+        notice(res === 'success' ? 'Umeunganishwa! Inakupeleka kwenye Internet…' : 'Tayari umeunganishwa.', 'ok',
+               '<a class="btn" href="' + go + '">Endelea</a>');
+        $('paneBuy').style.display = 'none'; $('paneCode').style.display = 'none';
+        setTimeout(function () { location.replace(go); }, 700);
+        return;
+      }
       else if (res === 'logoff') { notice('Umetoka. Ingiza code tena ukitaka kuendelea.', ''); showPane('code'); }
       if (!OWNER && !SITE) { showErr('Router haijasajiliwa bado'); $('buyForm').style.display = 'none'; return; }
       function fillPlans(plans) {

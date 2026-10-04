@@ -41,7 +41,7 @@ portal_url() {
 	cat >"$WWWDIR/config.js" <<EOF
 window.LIGHTNET={owner:"$(jsq "$owner")",site:"$(jsq "$site")",api:"$(jsq "$api")",ssid:"$(jsq "$(jget '@.site.ssid')")",phone:"$(jsq "$(jget '@.site.contact_phone')")",plans:$plans,uamip:"$HS_GW",uamport:"3990"};
 EOF
-	printf 'http://%s:3990/www/lightnet.html?v=2&owner=%s&site=%s' "$HS_GW" "$owner" "$site"
+	printf 'http://%s:3990/www/lightnet.html?v=3&owner=%s&site=%s' "$HS_GW" "$owner" "$site"
 }
 
 net_on() {
