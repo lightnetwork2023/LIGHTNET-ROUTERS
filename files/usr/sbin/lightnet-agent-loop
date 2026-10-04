@@ -14,7 +14,8 @@ while :; do
 	if [ "$configured" = "auto" ] && [ "$active" != "root" ] && [ "$active" != "agent" ] && [ $((now - last_detect)) -ge 60 ]; then
 		/usr/sbin/lightnet-apply-role auto >/dev/null 2>&1 || true
 		last_detect=$now
-	elif [ "$configured" = "auto" ] && [ "$active" = "root" ] && [ "$detection" = "standalone" ] && [ $((now - last_detect)) -ge 30 ]; then
+	elif [ "$configured" = "auto" ] && [ "$active" = "root" ] && [ "$detection" = "standalone" ] && [ "$(uci -q get lightnet.cloud.status)" != "provisioned" ] && [ $((now - last_detect)) -ge 30 ]; then
+		# standalone root (no upstream, no controller found): yield to a real master if one appears; a server-enrolled master never yields
 		if batctl n 2>/dev/null | tail -n +3 | grep -q . && /usr/sbin/lightnet-apply-role probe-controller; then
 			/usr/sbin/lightnet-apply-role auto >/dev/null 2>&1 || true
 		fi

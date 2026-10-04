@@ -450,6 +450,24 @@ if [ "$1" = "boot" ] && [ "$(state_get active_role)" = "agent" ] && [ "$(uci -q 
 	exit 0
 fi
 
+# A master stays a master. Once this unit became root because it had a real upstream (or was
+# set so by hand) or has been enrolled on the LightNet server, it must not probe the mesh for
+# another controller or demote itself just because the WAN has no data right now. Only an
+# explicit role choice (app/LuCI) or a factory reset changes that. Standalone roots (no
+# upstream, no controller found) keep re-detecting so a mesh never ends up with two masters.
+if [ "$(state_get active_role)" = "root" ] && [ "$CONFIGURED_ROLE" = "auto" ]; then
+	case "$(state_get detection)" in
+		wan-upstream|manual|bridge) sticky=1 ;;
+		*) sticky=0 ;;
+	esac
+	[ "$(uci -q get lightnet.cloud.status)" = "provisioned" ] && sticky=1
+	if [ "$sticky" = 1 ]; then
+		log "master router (detection=$(state_get detection)); keeping root role, mesh probing skipped"
+		[ -s /etc/lightnet/server.json ] && ( sleep 5; /usr/sbin/lightnet-hotspot ensure ) >/dev/null 2>&1 &
+		exit 0
+	fi
+fi
+
 if [ "$(uci -q get lightnet.main.network_mode)" != "bridge" ] && [ "$(cat /sys/class/net/wan/carrier 2>/dev/null)" = "1" ]; then
 	wan_wait=0
 	while [ -z "$(wan_ipv4)" ] && [ "$wan_wait" -lt 25 ]; do sleep 1; wan_wait=$((wan_wait + 1)); done
