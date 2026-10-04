@@ -56,4 +56,8 @@ if [ -n "$pending_cmd" ] && { [ "$adopted" = 1 ] || [ "$pending_cmd" = "reset" ]
 	[ "$command" = "reset" ] && rm -f "/etc/lightnet/inform/$macfile.json" "/etc/lightnet/inform/$macfile.token" "/tmp/lightnet-seen/$macfile"
 	logger -t lightnet "sent '$command' to $macfile"
 fi
-printf '{"ok":true,"device_id":"%s","adopted":%s,"backhaul":"%s","command":"%s"}\n' "$macfile" "$adopted" "$backhaul" "$command"
+extra=""
+if [ "$command" = "upgrade" ] && [ -s /tmp/lightnet-fw/sha256 ]; then
+	extra=",\"upgrade_path\":\"$(cat /tmp/lightnet-fw/path 2>/dev/null || echo /lightnet-fw.bin)\",\"upgrade_sha256\":\"$(cat /tmp/lightnet-fw/sha256)\""
+fi
+printf '{"ok":true,"device_id":"%s","adopted":%s,"backhaul":"%s","command":"%s"%s}\n' "$macfile" "$adopted" "$backhaul" "$command" "$extra"

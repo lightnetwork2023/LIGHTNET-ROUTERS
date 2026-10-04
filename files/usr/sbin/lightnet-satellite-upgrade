@@ -1,0 +1,88 @@
+#!/bin/sh
+# Relay a firmware image from the master to its adopted satellites.
+#
+#   lightnet-satellite-upgrade stage <file> [sha256] [mac ...]
+#       publish <file> at http://<controller>/lightnet-fw.bin, queue "upgrade" for the given
+#       satellites (default: every adopted satellite seen in the last 10 min) and wait until they
+#       have rebooted into it (or 240 s). Satellites flash clean (sysupgrade -n) and re-adopt.
+#   lightnet-satellite-upgrade url <url> [sha256] [mac ...]
+#       download first, then stage (manual use from the master).
+#   lightnet-satellite-upgrade status
+#   TARGET_BUILD=<fw_build> ...   skip satellites whose last inform already reports that build
+#
+# Used by lightnet-cloud before the master upgrades itself, so one "Upgrade" from the dashboard
+# updates the whole site. Satellites reach the master over the mesh only, hence the local copy.
+
+FW_DIR=/tmp/lightnet-fw
+WWW=/www/lightnet-fw.bin
+CMD_DIR=/tmp/lightnet-cmd
+log() { logger -t lightnet-satfw "$*"; echo "$*" >&2; }
+
+targets() {
+	if [ $# -gt 0 ]; then printf '%s\n' "$@" | tr 'A-F' 'a-f'; return; fi
+	now=$(date +%s)
+	for m in $(cat /etc/lightnet/adopted.list 2>/dev/null); do
+		f="/tmp/lightnet-seen/$m"
+		[ -f "$f" ] || continue
+		[ $((now - $(date -r "$f" +%s))) -le 600 ] && echo "$m"
+	done
+}
+
+hardif_seen() {
+	# satellite hardif MACs are 02:<mac[1..4]>:<last+4|+5>; present in batctl n while it is up
+	m="$1"; OIFS="$IFS"; IFS=':'; set -- $m; IFS="$OIFS"
+	for off in 4 5; do
+		h="$(printf '02:%s:%s:%s:%s:%02x' "$2" "$3" "$4" "$5" $(( (0x$6 + off) & 255 )))"
+		batctl n 2>/dev/null | tail -n +3 | grep -qi " $h " && return 0
+	done
+	return 1
+}
+
+stage() {
+	file="$1"; sum="$2"; shift 2
+	[ -s "$file" ] || { log "no image: $file"; return 1; }
+	have="$(sha256sum "$file" | awk '{print $1}')"
+	[ -z "$sum" ] && sum="$have"
+	[ "$have" = "$sum" ] || { log "checksum mismatch for $file"; return 1; }
+	mkdir -p "$FW_DIR" "$CMD_DIR"
+	[ "$file" = "$FW_DIR/sysupgrade.bin" ] || cp "$file" "$FW_DIR/sysupgrade.bin"
+	ln -sf "$FW_DIR/sysupgrade.bin" "$WWW"
+	echo "$sum" >"$FW_DIR/sha256"
+	echo "/lightnet-fw.bin" >"$FW_DIR/path"
+	list=""
+	for m in $(targets "$@"); do
+		# TARGET_BUILD (set by lightnet-cloud from the server command) lets us skip satellites already on it
+		cur="$(jsonfilter -i "/etc/lightnet/inform/$m.json" -e '@.firmware' 2>/dev/null)"
+		if [ -n "$TARGET_BUILD" ] && [ "$cur" = "$TARGET_BUILD" ]; then log "$m already on $TARGET_BUILD, skipped"; continue; fi
+		list="$list $m"
+	done
+	[ -n "$list" ] || { log "no adopted satellites need the image; staged at $WWW only"; return 0; }
+	for m in $list; do echo upgrade >"$CMD_DIR/$m"; echo "$m" >>"$FW_DIR/targets"; log "upgrade queued for $m"; done
+	# wait for them to pick the command up (inform every 15 s), download over the mesh and reboot
+	end=$(( $(date +%s) + 240 )); gone=""
+	while [ "$(date +%s)" -lt "$end" ]; do
+		sleep 10; pending=""
+		for m in $list; do
+			case " $gone " in *" $m "*) continue ;; esac
+			if hardif_seen "$m"; then pending="$pending $m"; else gone="$gone $m"; log "$m rebooting into new firmware"; fi
+		done
+		[ -z "$pending" ] && break
+	done
+	[ -n "$pending" ] && log "timeout waiting for:$pending (they will still upgrade when they fetch the command)"
+	return 0
+}
+
+case "$1" in
+	stage) shift; stage "$@" ;;
+	url)
+		url="$2"; sum="$3"; shift 3 2>/dev/null || shift $#
+		mkdir -p "$FW_DIR"
+		curl -s -L -m 600 -o "$FW_DIR/sysupgrade.bin" "$url" || { log "download failed: $url"; exit 1; }
+		stage "$FW_DIR/sysupgrade.bin" "$sum" "$@"
+		;;
+	status)
+		[ -s "$FW_DIR/sha256" ] && echo "staged sha256: $(cat "$FW_DIR/sha256") targets: $(cat "$FW_DIR/targets" 2>/dev/null | sort -u | tr '\n' ' ')" || echo "nothing staged"
+		for f in /etc/lightnet/inform/*.json; do [ -f "$f" ] && echo "$(jsonfilter -i "$f" -e '@.hostname') $(jsonfilter -i "$f" -e '@.device_id') fw=$(jsonfilter -i "$f" -e '@.firmware') up=$(jsonfilter -i "$f" -e '@.uptime')s"; done
+		;;
+	*) echo "usage: $0 stage <file> [sha256] [mac ...] | url <url> [sha256] [mac ...] | status"; exit 1 ;;
+esac

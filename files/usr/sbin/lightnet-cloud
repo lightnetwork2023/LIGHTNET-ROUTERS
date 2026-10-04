@@ -42,9 +42,10 @@ satellites_json() {
 		name="$(cat "/etc/lightnet/names/$m" 2>/dev/null)"
 		host="$(jsonfilter -i "$f" -e '@.hostname' 2>/dev/null)"
 		sig="$(jsonfilter -i "$f" -e '@.uplink_signal' 2>/dev/null)"
+		fw="$(jsonfilter -i "$f" -e '@.firmware' 2>/dev/null)"
 		seen="$(stat -c %Y "/tmp/lightnet-seen/$m" 2>/dev/null || echo 0)"
 		[ $first = 1 ] || printf ','
-		printf '{"mac":"%s","hostname":"%s","name":"%s","signal":%s,"online":%s}' "$m" "$(esc "$host")" "$(esc "$name")" "${sig:-null}" \
+		printf '{"mac":"%s","hostname":"%s","name":"%s","signal":%s,"fw_build":"%s","online":%s}' "$m" "$(esc "$host")" "$(esc "$name")" "${sig:-null}" "$(esc "$fw")" \
 			"$([ $(( $(date +%s) - seen )) -lt 120 ] && echo true || echo false)"
 		first=0
 	done
@@ -81,7 +82,11 @@ run_commands() {
 				url="$(jq "$resp" "@.commands[$n].url")"; sum="$(jq "$resp" "@.commands[$n].sha256")"
 				[ -n "$url" ] && curl -s -L -m 600 -o /tmp/lightnet-upgrade.bin "$url" && {
 					have="$(sha256sum /tmp/lightnet-upgrade.bin | awk '{print $1}')"
-					if [ -z "$sum" ] || [ "$have" = "$sum" ]; then log "upgrading firmware"; sysupgrade -k /tmp/lightnet-upgrade.bin; else log "upgrade checksum mismatch"; rm -f /tmp/lightnet-upgrade.bin; fi
+					if [ -z "$sum" ] || [ "$have" = "$sum" ]; then
+						# satellites first (they fetch the image from this router over the mesh), then the master
+						TARGET_BUILD="$(jq "$resp" "@.commands[$n].fw_build")" /usr/sbin/lightnet-satellite-upgrade stage /tmp/lightnet-upgrade.bin "$have" >/dev/null 2>&1
+						log "upgrading firmware"; sysupgrade -k /tmp/lightnet-upgrade.bin
+					else log "upgrade checksum mismatch"; rm -f /tmp/lightnet-upgrade.bin; fi
 				} ;;
 		esac
 		n=$((n + 1))

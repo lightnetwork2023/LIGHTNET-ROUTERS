@@ -53,7 +53,7 @@ if [ -n "$cmac" ]; then
 	fi
 fi
 model="$(cat /tmp/sysinfo/model 2>/dev/null || echo Q20)"
-firmware="LightNet-Q20-test"
+firmware="$(sed -n 's/^build=//p' /rom/etc/lightnet/firmware.id /etc/lightnet/firmware.id 2>/dev/null | head -n1)"; firmware="${firmware:-unknown}"
 token="$(cat /etc/lightnet/device.token 2>/dev/null)"
 
 [ "$role" != "agent" ] && exit 0
@@ -80,6 +80,21 @@ fi
 if [ "$adopted" = 1 ] && printf '%s' "$response" | grep -q '"command"[ ]*:[ ]*"reset"'; then
 	logger -t lightnet "removed by controller; factory reset"
 	( sleep 2; firstboot -y; sync; reboot ) >/dev/null 2>&1 </dev/null &
+	exit 0
+fi
+
+if [ "$adopted" = 1 ] && printf '%s' "$response" | grep -q '"command"[ ]*:[ ]*"upgrade"'; then
+	path="$(printf '%s' "$response" | jsonfilter -e '@.upgrade_path' 2>/dev/null)"; sum="$(printf '%s' "$response" | jsonfilter -e '@.upgrade_sha256' 2>/dev/null)"
+	logger -t lightnet "firmware upgrade requested by controller (http://$controller${path:-/lightnet-fw.bin})"
+	(
+		rm -f /tmp/lightnet-upgrade.bin
+		wget -q -T 60 -O /tmp/lightnet-upgrade.bin "http://$controller${path:-/lightnet-fw.bin}" 2>/dev/null || { logger -t lightnet "upgrade download failed"; exit 1; }
+		have="$(sha256sum /tmp/lightnet-upgrade.bin | awk '{print $1}')"
+		[ -z "$sum" ] || [ "$have" = "$sum" ] || { logger -t lightnet "upgrade checksum mismatch"; rm -f /tmp/lightnet-upgrade.bin; exit 1; }
+		sysupgrade -T /tmp/lightnet-upgrade.bin >/dev/null 2>&1 || { logger -t lightnet "upgrade image rejected"; rm -f /tmp/lightnet-upgrade.bin; exit 1; }
+		# clean flash: the controller's adopted.list/names bring the satellite back adopted with the fleet profile
+		logger -t lightnet "flashing $have"; sleep 1; sysupgrade -n /tmp/lightnet-upgrade.bin
+	) >/dev/null 2>&1 </dev/null &
 	exit 0
 fi
 
