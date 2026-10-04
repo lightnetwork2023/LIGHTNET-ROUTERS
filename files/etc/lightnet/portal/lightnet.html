@@ -159,12 +159,10 @@
         if (!data.success || !data.payment) { setStatus('Inaangalia tena…'); schedulePoll(id); return; }
         var p = data.payment;
         if (p.status === 'paid' && p.voucher) {
-          pollDone = true; $('spin').style.display = 'none';
-          setStatus('Imelipwa — inakuunganisha kwenye Wi‑Fi…');
-          $('codeBox').style.display = 'block'; $('codeBox').textContent = p.voucher;
-          var href = logonUrl(p.voucher);
-          $('paidActions').innerHTML = '<a class="btn" href="' + href + '">Unganisha sasa</a>';
-          setTimeout(function () { location.replace(href); }, 800);
+          pollDone = true;
+          setStatus('Imelipwa — inakuunganisha…');
+          // chilli runs with nouamsuccess: /logon sends the phone straight to userurl, no portal hop
+          location.replace(logonUrl(p.voucher));
           return;
         }
         if (p.status === 'pending') {
