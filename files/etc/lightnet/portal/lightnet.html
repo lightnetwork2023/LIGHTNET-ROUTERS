@@ -198,6 +198,7 @@
       $('clientMac').textContent = MAC ? 'Kifaa: ' + MAC : '';
       var res = qs('res');
       if (res === 'failed') { notice('Code si sahihi, imeisha muda au inatumika kwenye kifaa kingine.', 'err'); showPane('code'); }
+      else if (res === 'success') { notice('Umeunganishwa! Ingia Internet sasa.', 'ok', '<a class="btn" href="' + (USERURL || 'http://neverssl.com/') + '">Endelea</a>'); }
       else if (res === 'already') { notice('Tayari umeunganishwa.', 'ok', '<a class="btn" href="' + USERURL + '">Endelea</a>'); }
       else if (res === 'logoff') { notice('Umetoka. Ingiza code tena ukitaka kuendelea.', ''); showPane('code'); }
       if (!OWNER && !SITE) { showErr('Router haijasajiliwa bado'); $('buyForm').style.display = 'none'; return; }
