@@ -165,7 +165,7 @@ start() {
 	write_conf || { log "no provisioning data; chilli not started"; return 1; }
 	stop
 	ip link show br-hotspot >/dev/null 2>&1 || { log "br-hotspot missing"; return 1; }
-	/usr/sbin/chilli --conf "$CONF" >/dev/null 2>&1 &
+	LD_PRELOAD=/usr/lib/libchilli-edns.so /usr/sbin/chilli --conf "$CONF" >/dev/null 2>&1 &
 	sleep 2
 	[ -s "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null && { log "chilli started (NAS $(jget '@.radius.nas_ip'))"; return 0; }
 	log "chilli failed to start"; return 1
