@@ -19,11 +19,11 @@ log() { logger -t lightnet-hotspot "$*"; }
 jget() { jsonfilter -i "$SERVER_JSON" -e "$1" 2>/dev/null; }
 jsq() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
-# Router-hosted portal: chilli's UAM server (:3990) serves static files from wwwdir under /www/.
-# The page calls the LightNet server API cross-origin (CORS), like the UniFi/TP-Link portals do.
+# MikroTik-style: the UAM server points to the LightNet payment page on the server.
+# The router only hosts a tiny local redirect as a fallback if portal=local is set.
 portal_url() {
 	buy="$(jget '@.portal.buy_url')"
-	[ "$(uci -q get lightnet.cloud.portal)" = "server" ] && { printf '%s' "$buy"; return; }
+	[ "$(uci -q get lightnet.cloud.portal)" = "local" ] || { printf '%s' "$buy"; return; }
 	owner="$(jget '@.site.owner_id')"; site="$(jget '@.site.id')"
 	api="${buy%%/buy*}"
 	mkdir -p "$WWWDIR"
