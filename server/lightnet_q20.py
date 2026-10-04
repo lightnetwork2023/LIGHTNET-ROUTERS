@@ -2,7 +2,7 @@
 
 Additive module: new tables (see schema.sql) and new routes only. Q20 sites are
 created through the same lightnet_sites helpers the MikroTik flow uses
-(allocate_wg_ip / add_nas / add_peer / reload_freeradius_clients), so they get
+(allocate_wg_ip / add_nas / add_peer; FreeRADIUS loads the nas row dynamically), so they get
 the next WG IP, a nas row and a live peer exactly like a MikroTik site.
 
 Routes
@@ -314,8 +314,12 @@ def register_routes(app, db_config, require_owner, billing_hooks=None):
                                         comment='Q20 %s site id=%s' % (mac, site['id']))
             except Exception as e:
                 log.error('q20 add_peer %s: %s', mac, e)
+            # No freeradius restart: clients.conf has `lightnet-wg-dynamic` (10.0.1.0/24,
+            # dynamic_clients from the nas table), verified live 2026-10-04 ("Adding client
+            # 10.0.1.1/32" without restart). A restart would blip auth for every MikroTik/Omada NAS.
             if new_site:
-                lightnet_sites.reload_freeradius_clients()
+                _event(cur, mac, r['id'], 'nas_dynamic', 'nas %s served by freeradius dynamic clients, no restart' % site['wg_ip'], _src())
+                conn.commit()
             cur.execute('SELECT * FROM lightnet_routers WHERE id=%s', (r['id'],))
             r = cur.fetchone()
             return jsonify({'ok': True, 'status': 'provisioned', 'router_id': r['id'],

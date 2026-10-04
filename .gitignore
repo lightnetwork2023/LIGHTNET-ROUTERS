@@ -3,3 +3,4 @@ bin/
 *.o
 *.orig
 *.rej
+__pycache__/

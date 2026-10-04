@@ -1,0 +1,18 @@
+--- a/src/dns.c
++++ b/src/dns.c
+@@ -319,10 +319,13 @@
+ 
+   switch (type) {
+ 
++    /* Unknown/newer record types (e.g. 64 SVCB, 65 HTTPS, 257 CAA) sent by
++     * modern phones: skip the RDATA (length already checked above) instead of
++     * rejecting the whole packet, which NAKs the query and breaks captive
++     * portal detection. Upstream master only adds a case for type 65. */
+     default:
+       if (_options.debug)
+-        syslog(LOG_DEBUG, "%s(%d): Record type %d", __FUNCTION__, __LINE__, type);
+-      return_error;
++        syslog(LOG_DEBUG, "%s(%d): Record type %d (skipped)", __FUNCTION__, __LINE__, type);
+       break;
+ 
+     case 1:
