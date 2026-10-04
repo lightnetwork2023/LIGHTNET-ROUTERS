@@ -19,18 +19,27 @@ log() { logger -t lightnet-hotspot "$*"; }
 jget() { jsonfilter -i "$SERVER_JSON" -e "$1" 2>/dev/null; }
 jsq() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
-# MikroTik-style: the UAM server points to the LightNet payment page on the server.
-# The router only hosts a tiny local redirect as a fallback if portal=local is set.
+# Router-hosted portal (MikroTik model): chilli UAM httpd serves a local page.
+# The page does not need client-side DNS for packages because the router fetches
+# the package list from the server and embeds it in config.js. Payment still
+# calls the server API; if that fails, the user can use "Nina Code".
+# Set `uci set lightnet.cloud.portal=server` to use the server /buy page directly.
 portal_url() {
 	buy="$(jget '@.portal.buy_url')"
-	[ "$(uci -q get lightnet.cloud.portal)" = "local" ] || { printf '%s' "$buy"; return; }
+	[ "$(uci -q get lightnet.cloud.portal)" != "server" ] || { printf '%s' "$buy"; return; }
 	owner="$(jget '@.site.owner_id')"; site="$(jget '@.site.id')"
 	api="${buy%%/buy*}"
 	mkdir -p "$WWWDIR"
 	cp -f "$PORTAL_SRC"/* "$WWWDIR"/ 2>/dev/null
 	[ -s /etc/lightnet/portal/logo.png ] || [ ! -s /www/luci-static/lightnet/logo.png ] || cp -f /www/luci-static/lightnet/logo.png "$WWWDIR"/logo.png
+	# Router fetches packages now so the local page does not need client DNS.
+	plans="[]"
+	if [ -n "$api" ] && [ -n "$owner" ] && [ -n "$site" ]; then
+		plans_json="$(curl -sL --max-time 20 -H 'Accept: application/json' "$api/api/buy/bootstrap?owner=$owner&site=$site" 2>/dev/null | jsonfilter -e '@.plans' 2>/dev/null)"
+		[ -n "$plans_json" ] && plans="$plans_json"
+	fi
 	cat >"$WWWDIR/config.js" <<EOF
-window.LIGHTNET={owner:"$(jsq "$owner")",site:"$(jsq "$site")",api:"$(jsq "$api")",ssid:"$(jsq "$(jget '@.site.ssid')")",phone:"$(jsq "$(jget '@.site.contact_phone')")",uamip:"$HS_GW",uamport:"3990"};
+window.LIGHTNET={owner:"$(jsq "$owner")",site:"$(jsq "$site")",api:"$(jsq "$api")",ssid:"$(jsq "$(jget '@.site.ssid')")",phone:"$(jsq "$(jget '@.site.contact_phone')")",plans:$plans,uamip:"$HS_GW",uamport:"3990"};
 EOF
 	printf 'http://%s:3990/www/lightnet.html?owner=%s&site=%s' "$HS_GW" "$owner" "$site"
 }

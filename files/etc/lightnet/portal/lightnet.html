@@ -201,6 +201,13 @@
       else if (res === 'already') { notice('Tayari umeunganishwa.', 'ok', '<a class="btn" href="' + USERURL + '">Endelea</a>'); }
       else if (res === 'logoff') { notice('Umetoka. Ingiza code tena ukitaka kuendelea.', ''); showPane('code'); }
       if (!OWNER && !SITE) { showErr('Router haijasajiliwa bado'); $('buyForm').style.display = 'none'; return; }
+      function fillPlans(plans) {
+        var sel = $('plan_id'); sel.innerHTML = '<option value="">Chagua Kifurushi</option>';
+        (plans || []).forEach(function (p) { var o = document.createElement('option'); o.value = p.id; o.textContent = p.name + ' — ' + p.price_tzs + ' TSH'; sel.appendChild(o); });
+        if (!(plans || []).length) { sel.innerHTML = '<option value="">Hakuna vifurushi kwa sasa</option>'; }
+      }
+      // Router pre-fetches plans into config.js so the list appears immediately without client DNS.
+      if (CFG.plans && CFG.plans.length) { fillPlans(CFG.plans); return; }
       try {
         var r = await fetch(API + '/api/buy/bootstrap?owner=' + encodeURIComponent(OWNER) + '&site=' + encodeURIComponent(SITE) + '&mac=' + encodeURIComponent(MAC), { cache: 'no-store' });
         var data = await r.json();
@@ -208,9 +215,7 @@
         OWNER = data.owner.id; if (data.site) SITE = data.site.id;
         if (data.site && data.site.name) $('siteName').textContent = data.site.name;
         if (data.owner.phone) { $('supportTel').textContent = data.owner.phone; $('supportTel').href = 'tel:' + data.owner.phone; }
-        var sel = $('plan_id'); sel.innerHTML = '<option value="">Chagua Kifurushi</option>';
-        (data.plans || []).forEach(function (p) { var o = document.createElement('option'); o.value = p.id; o.textContent = p.name + ' — ' + p.price_tzs + ' TSH'; sel.appendChild(o); });
-        if (!(data.plans || []).length) { sel.innerHTML = '<option value="">Hakuna vifurushi kwa sasa</option>'; }
+        fillPlans(data.plans);
       } catch (e) {
         $('plan_id').innerHTML = '<option value="">Vifurushi havikupakia</option>';
         showErr('Imeshindikana kufikia seva ya LightNet. Jaribu tena.');
