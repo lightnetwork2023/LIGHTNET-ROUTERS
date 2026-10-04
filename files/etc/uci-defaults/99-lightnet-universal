@@ -102,7 +102,9 @@ if uci -q get network.@device[0].name | grep -q '^br-lan$'; then
 	uci -q get network.@device[0].ports | grep -qw bat0 || uci add_list network.@device[0].ports='bat0'
 fi
 
-cat > /etc/lightnet/state <<'EOF'
+# Fresh install only. On a kept-settings upgrade the state survives (sysupgrade.conf), so a
+# master stays root and an adopted satellite stays agent instead of re-detecting at boot.
+[ -s /etc/lightnet/state ] || cat > /etc/lightnet/state <<'EOF'
 role=auto
 active_role=detect
 adopted=0
