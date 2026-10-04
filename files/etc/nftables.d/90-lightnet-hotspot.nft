@@ -1,0 +1,12 @@
+# LightNet hotspot: CoovaChilli owns br-hotspot through an AF_PACKET socket.
+# The bridge also hands every client frame addressed to the gateway MAC (= the
+# bridge MAC) to the kernel IP stack, which then (a) answered unauthenticated
+# SYNs with TCP RSTs ahead of chilli's portal redirect and (b) forwarded a
+# second copy of every established flow out of the WAN (double upstream
+# traffic). Drop at the raw prerouting hook: AF_PACKET taps have already seen
+# the frame, so chilli is unaffected, and nothing from br-hotspot reaches
+# conntrack/forward/input.
+chain lightnet_hotspot_l2_raw {
+	type filter hook prerouting priority raw; policy accept;
+	iifname "br-hotspot" counter drop comment "!LightNet: chilli owns br-hotspot; keep client frames out of the IP stack"
+}
