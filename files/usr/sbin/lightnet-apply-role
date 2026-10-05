@@ -470,6 +470,7 @@ if [ "$(state_get active_role)" = "root" ] && [ "$CONFIGURED_ROLE" = "auto" ]; t
 		# upgrade; the fleet profile must be put back even though the role is not re-applied.
 		apply_client_wifi
 		uci commit wireless
+		wifi reload >/dev/null 2>&1
 		[ -s /etc/lightnet/server.json ] && ( sleep 5; /usr/sbin/lightnet-hotspot ensure ) >/dev/null 2>&1 9>&- &
 		exit 0
 	fi

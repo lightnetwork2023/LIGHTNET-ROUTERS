@@ -260,7 +260,11 @@ wifi_guard() {
 	# the kernel also sees client frames on br-hotspot; without this rule fw4's
 	# forward-chain REJECT answers each SYN with a TCP RST before chilli's redirect
 	[ -n "$(uci -q get firewall.ln_hs_l2_fwd)" ] && [ -n "$(uci -q get firewall.ln_hs_mgmt)" ] || { fw_on; fixed=1; /etc/init.d/firewall reload >/dev/null 2>&1; }
-	[ "$fixed" = 1 ] || return 0
+	# config may be right while the APs never came up (radios started before the profile was restored)
+	if [ "$fixed" != 1 ]; then
+		[ -d /sys/class/net/phy0-ap0 ] || [ -d /sys/class/net/phy1-ap0 ] && return 0
+		log "client APs missing; reloading wifi"; wifi reload >/dev/null 2>&1; return 1
+	fi
 	uci commit wireless; uci commit network
 	log "hotspot VLAN/firewall guard re-applied"
 	ubus call network reload >/dev/null 2>&1; wifi reload >/dev/null 2>&1
