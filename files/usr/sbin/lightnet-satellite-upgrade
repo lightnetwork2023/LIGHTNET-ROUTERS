@@ -45,7 +45,8 @@ stage() {
 	[ -z "$sum" ] && sum="$have"
 	[ "$have" = "$sum" ] || { log "checksum mismatch for $file"; return 1; }
 	mkdir -p "$FW_DIR" "$CMD_DIR"
-	[ "$file" = "$FW_DIR/sysupgrade.bin" ] || cp "$file" "$FW_DIR/sysupgrade.bin"
+	# link, don't copy: /tmp is RAM and the master still has to run its own sysupgrade afterwards
+	[ "$file" = "$FW_DIR/sysupgrade.bin" ] || ln -sf "$file" "$FW_DIR/sysupgrade.bin"
 	ln -sf "$FW_DIR/sysupgrade.bin" "$WWW"
 	echo "$sum" >"$FW_DIR/sha256"
 	echo "/lightnet-fw.bin" >"$FW_DIR/path"

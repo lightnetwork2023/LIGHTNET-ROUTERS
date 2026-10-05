@@ -85,6 +85,7 @@ run_commands() {
 					if [ -z "$sum" ] || [ "$have" = "$sum" ]; then
 						# satellites first (they fetch the image from this router over the mesh), then the master
 						TARGET_BUILD="$(jq "$resp" "@.commands[$n].fw_build")" /usr/sbin/lightnet-satellite-upgrade stage /tmp/lightnet-upgrade.bin "$have" >/dev/null 2>&1
+						rm -f /www/lightnet-fw.bin /tmp/lightnet-fw/sysupgrade.bin
 						log "upgrading firmware"; sysupgrade -k /tmp/lightnet-upgrade.bin
 					else log "upgrade checksum mismatch"; rm -f /tmp/lightnet-upgrade.bin; fi
 				} ;;
