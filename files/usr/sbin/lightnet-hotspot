@@ -44,6 +44,47 @@ EOF
 	printf 'http://%s:3990/www/lightnet.html?v=4&owner=%s&site=%s' "$HS_GW" "$owner" "$site"
 }
 
+active_role() { sed -n 's/^active_role=//p' /etc/lightnet/state 2>/dev/null | tail -n1; }
+br_lan_section() {
+	i=0
+	while :; do
+		name="$(uci -q get "network.@device[$i].name")"
+		[ -z "$name" ] && break
+		[ "$name" = "br-lan" ] && { echo "$i"; return; }
+		i=$((i + 1))
+	done
+}
+# Every client-facing wired port is part of the portal, exactly like the SSIDs. The wired
+# backhaul (root: lan2 -> satellites, agent: wan -> master) is a BATMAN hardif and never
+# a client port. Management from a client port = authenticate on the portal first.
+client_ports() { [ "$(active_role)" = "agent" ] && echo "lan1 lan2" || echo "lan1"; }
+
+# pin the client ports to br-hotspot (and off br-lan); returns 1 when something changed
+pin_ports() {
+	[ -n "$(uci -q get network.hotspot)" ] || return 0
+	br="$(br_lan_section)"; changed=0
+	hs_ports="$(uci -q get network.dev_hs.ports)"
+	lan_ports="$(uci -q get "network.@device[$br].ports")"
+	for p in $(client_ports); do
+		printf '%s\n' $hs_ports | grep -qx "$p" || { uci add_list network.dev_hs.ports="$p"; changed=1; }
+		[ -n "$br" ] && printf '%s\n' $lan_ports | grep -qx "$p" && { uci del_list "network.@device[$br].ports=$p"; changed=1; }
+	done
+	[ "$changed" = 1 ] || return 0
+	uci commit network
+	return 1
+}
+
+# give the client ports back to br-lan (hotspot removed)
+unpin_ports() {
+	br="$(br_lan_section)"; [ -n "$br" ] || return 0
+	lan_ports="$(uci -q get "network.@device[$br].ports")"
+	for p in lan1 lan2; do
+		[ "$p" = "lan2" ] && [ "$(active_role)" != "agent" ] && continue
+		printf '%s\n' $lan_ports | grep -qx "$p" || uci add_list "network.@device[$br].ports=$p"
+	done
+	uci commit network
+}
+
 net_on() {
 	uci -q batch <<EOF
 set network.dev_hs_vlan=device
@@ -64,9 +105,11 @@ set wireless.default_radio0.network='hotspot'
 set wireless.default_radio1.network='hotspot'
 EOF
 	uci commit network; uci commit wireless
+	pin_ports || true
 }
 
 net_off() {
+	unpin_ports
 	uci -q batch <<EOF
 delete network.hotspot
 delete network.dev_hs
@@ -124,12 +167,19 @@ set firewall.ln_hs_dns.src='hotspot'
 set firewall.ln_hs_dns.proto='tcp udp'
 set firewall.ln_hs_dns.dest_port='53'
 set firewall.ln_hs_dns.target='ACCEPT'
+delete firewall.ln_hs_mgmt
+set firewall.ln_hs_mgmt=rule
+set firewall.ln_hs_mgmt.name='LightNet hotspot management (authenticated clients -> LuCI/SSH)'
+set firewall.ln_hs_mgmt.src='hotspot'
+set firewall.ln_hs_mgmt.proto='tcp'
+set firewall.ln_hs_mgmt.dest_port='22 80 443'
+set firewall.ln_hs_mgmt.target='ACCEPT'
 EOF
 	uci commit firewall
 }
 
 fw_off() {
-	for s in ln_hs_zone ln_hs_l2 ln_hs_l2_fwd ln_hs_fwd ln_hs_uam ln_hs_icmp ln_hs_dns; do uci -q delete "firewall.$s"; done
+	for s in ln_hs_zone ln_hs_l2 ln_hs_l2_fwd ln_hs_fwd ln_hs_uam ln_hs_icmp ln_hs_dns ln_hs_mgmt; do uci -q delete "firewall.$s"; done
 	uci commit firewall
 }
 
@@ -206,9 +256,10 @@ wifi_guard() {
 		[ "$(uci -q get wireless.$i.disabled)" = "0" ] || { uci set wireless.$i.disabled='0'; fixed=1; }
 	done
 	[ -n "$(uci -q get network.hotspot)" ] || { net_on; fixed=1; }
+	pin_ports || fixed=1
 	# the kernel also sees client frames on br-hotspot; without this rule fw4's
 	# forward-chain REJECT answers each SYN with a TCP RST before chilli's redirect
-	[ -n "$(uci -q get firewall.ln_hs_l2_fwd)" ] || { fw_on; fixed=1; /etc/init.d/firewall reload >/dev/null 2>&1; }
+	[ -n "$(uci -q get firewall.ln_hs_l2_fwd)" ] && [ -n "$(uci -q get firewall.ln_hs_mgmt)" ] || { fw_on; fixed=1; /etc/init.d/firewall reload >/dev/null 2>&1; }
 	[ "$fixed" = 1 ] || return 0
 	uci commit wireless; uci commit network
 	log "hotspot VLAN/firewall guard re-applied"

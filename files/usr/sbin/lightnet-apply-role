@@ -287,6 +287,8 @@ EOF
 	uci commit dhcp
 	svc enable "firewall dnsmasq odhcpd"
 	state_set active_role root
+	# client ports belong to the portal bridge while a hotspot exists
+	[ -n "$(uci -q get network.hotspot)" ] && /usr/sbin/lightnet-hotspot net on
 	case "$1" in
 		manual) state_set detection manual ;;
 		standalone) state_set detection standalone ;;
@@ -335,6 +337,7 @@ EOF
 	svc stop "firewall dnsmasq odhcpd opennds"
 	svc disable "firewall dnsmasq odhcpd opennds"
 	state_set active_role agent
+	[ -n "$(uci -q get network.hotspot)" ] && /usr/sbin/lightnet-hotspot net on
 	state_set detection "$1"
 	restart_stack
 	log "role=agent applied via $2"
