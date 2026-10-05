@@ -201,7 +201,7 @@ restart_stack() {
 	done
 	# Hotspot (CoovaChilli) follows the role: runs on root only, after the bridges exist
 	if [ -s /etc/lightnet/server.json ]; then
-		( sleep 5; /usr/sbin/lightnet-hotspot ensure ) >/dev/null 2>&1 &
+		( sleep 5; /usr/sbin/lightnet-hotspot ensure ) >/dev/null 2>&1 9>&- &
 	fi
 }
 
@@ -463,7 +463,11 @@ if [ "$(state_get active_role)" = "root" ] && [ "$CONFIGURED_ROLE" = "auto" ]; t
 	[ "$(uci -q get lightnet.cloud.status)" = "provisioned" ] && sticky=1
 	if [ "$sticky" = 1 ]; then
 		log "master router (detection=$(state_get detection)); keeping root role, mesh probing skipped"
-		[ -s /etc/lightnet/server.json ] && ( sleep 5; /usr/sbin/lightnet-hotspot ensure ) >/dev/null 2>&1 &
+		# uci-defaults resets the client SSIDs (disabled, default name) on every kept-settings
+		# upgrade; the fleet profile must be put back even though the role is not re-applied.
+		apply_client_wifi
+		uci commit wireless
+		[ -s /etc/lightnet/server.json ] && ( sleep 5; /usr/sbin/lightnet-hotspot ensure ) >/dev/null 2>&1 9>&- &
 		exit 0
 	fi
 fi
