@@ -59,6 +59,7 @@ stage() {
 	done
 	[ -n "$list" ] || { log "no adopted satellites need the image; staged at $WWW only"; return 0; }
 	for m in $list; do echo upgrade >"$CMD_DIR/$m"; echo "$m" >>"$FW_DIR/targets"; log "upgrade queued for $m"; done
+	[ "$NOWAIT" = 1 ] && return 0
 	# wait for them to pick the command up (inform every 15 s), download over the mesh and reboot
 	end=$(( $(date +%s) + 240 )); gone=""
 	while [ "$(date +%s)" -lt "$end" ]; do
@@ -73,6 +74,40 @@ stage() {
 	return 0
 }
 
+main_build() {
+	sed -n 's/^build=//p' /rom/etc/lightnet/firmware.id /etc/lightnet/firmware.id 2>/dev/null | head -n1
+}
+
+# After the main has flashed, re-fetch the published image and queue any adopted
+# satellite that came back on an older build (missed the original 4-minute window).
+catchup() {
+	[ "$(sed -n 's/^active_role=//p' /etc/lightnet/state 2>/dev/null | tail -n1)" = "root" ] || return 0
+	[ -s /etc/lightnet/fleet-fw ] || return 0
+	target="$(sed -n 's/^fw_build=//p' /etc/lightnet/fleet-fw | head -n1)"
+	sum="$(sed -n 's/^sha256=//p' /etc/lightnet/fleet-fw | head -n1)"
+	url="$(sed -n 's/^url=//p' /etc/lightnet/fleet-fw | head -n1)"
+	[ -n "$target" ] && [ -n "$url" ] || return 0
+	[ "$target" = "$(main_build)" ] || return 0
+	stale=""
+	now=$(date +%s)
+	for m in $(cat /etc/lightnet/adopted.list 2>/dev/null); do
+		m="$(printf '%s' "$m" | tr 'A-F' 'a-f')"
+		f="/tmp/lightnet-seen/$m"
+		[ -f "$f" ] || continue
+		[ $((now - $(date -r "$f" +%s))) -le 1200 ] || continue
+		cur="$(jsonfilter -i "/etc/lightnet/inform/$m.json" -e '@.firmware' 2>/dev/null)"
+		[ "$cur" = "$target" ] && continue
+		stale="$stale $m"
+	done
+	[ -n "$stale" ] || return 0
+	if [ ! -s "$WWW" ] || [ "$(cat "$FW_DIR/sha256" 2>/dev/null)" != "$sum" ]; then
+		log "catchup: downloading fleet image $target for$stale"
+		mkdir -p "$FW_DIR"
+		curl -s -L -m 600 -o "$FW_DIR/sysupgrade.bin" "$url" || { log "catchup download failed"; return 1; }
+	fi
+	NOWAIT=1 TARGET_BUILD="$target" stage "$FW_DIR/sysupgrade.bin" "$sum" $stale
+}
+
 case "$1" in
 	stage) shift; stage "$@" ;;
 	url)
@@ -85,5 +120,6 @@ case "$1" in
 		[ -s "$FW_DIR/sha256" ] && echo "staged sha256: $(cat "$FW_DIR/sha256") targets: $(cat "$FW_DIR/targets" 2>/dev/null | sort -u | tr '\n' ' ')" || echo "nothing staged"
 		for f in /etc/lightnet/inform/*.json; do [ -f "$f" ] && echo "$(jsonfilter -i "$f" -e '@.hostname') $(jsonfilter -i "$f" -e '@.device_id') fw=$(jsonfilter -i "$f" -e '@.firmware') up=$(jsonfilter -i "$f" -e '@.uptime')s"; done
 		;;
-	*) echo "usage: $0 stage <file> [sha256] [mac ...] | url <url> [sha256] [mac ...] | status"; exit 1 ;;
+	catchup) catchup ;;
+	*) echo "usage: $0 stage <file> [sha256] [mac ...] | url <url> [sha256] [mac ...] | catchup | status"; exit 1 ;;
 esac

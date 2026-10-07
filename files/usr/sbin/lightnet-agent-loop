@@ -42,6 +42,8 @@ while :; do
 
 	active="$(sed -n 's/^active_role=//p' /etc/lightnet/state 2>/dev/null | tail -n1)"
 	[ "$active" = "agent" ] && /usr/sbin/lightnet-inform >/dev/null 2>&1 || true
+	# Main: late mesh APs that missed the fleet flash get the image when they inform again.
+	[ "$active" = "root" ] && flock -n /tmp/lightnet-fw.catchup.lock /usr/sbin/lightnet-satellite-upgrade catchup >/dev/null 2>&1 &
 	/usr/sbin/lightnet-led >/dev/null 2>&1 || true
 	sleep 15
 done

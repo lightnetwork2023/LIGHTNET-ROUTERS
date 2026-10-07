@@ -94,6 +94,8 @@ do_upgrade() {
 	have="$(sha256sum /tmp/lightnet-upgrade.bin | awk '{print $1}')"
 	[ -z "$sum" ] || [ "$have" = "$sum" ] || { log "upgrade checksum mismatch"; rm -f /tmp/lightnet-upgrade.bin; return 1; }
 	sysupgrade -T /tmp/lightnet-upgrade.bin >/dev/null 2>&1 || { log "upgrade image rejected"; rm -f /tmp/lightnet-upgrade.bin; return 1; }
+	mkdir -p /etc/lightnet
+	printf 'fw_build=%s\nsha256=%s\nurl=%s\n' "${target:-$have}" "$have" "$url" > /etc/lightnet/fleet-fw
 	TARGET_BUILD="$target" /usr/sbin/lightnet-satellite-upgrade stage /tmp/lightnet-upgrade.bin "$have" >/dev/null 2>&1
 	rm -f /www/lightnet-fw.bin /tmp/lightnet-fw/sysupgrade.bin
 	log "upgrading firmware to ${target:-$have}"
