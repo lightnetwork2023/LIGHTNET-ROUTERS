@@ -60,4 +60,5 @@ extra=""
 if [ "$command" = "upgrade" ] && [ -s /tmp/lightnet-fw/sha256 ]; then
 	extra=",\"upgrade_path\":\"$(cat /tmp/lightnet-fw/path 2>/dev/null || echo /lightnet-fw.bin)\",\"upgrade_sha256\":\"$(cat /tmp/lightnet-fw/sha256)\""
 fi
+[ "$adopted" = 1 ] && extra="$extra,\"kick\":$(/usr/sbin/lightnet-kick pending 2>/dev/null || echo '[]')"
 printf '{"ok":true,"device_id":"%s","adopted":%s,"backhaul":"%s","command":"%s"%s}\n' "$macfile" "$adopted" "$backhaul" "$command" "$extra"

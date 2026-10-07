@@ -70,6 +70,21 @@ payload() {
 
 post() { curl -s -m 40 -H 'Content-Type: application/json' -X POST --data-binary "$2" "$(base_url)$1" 2>/dev/null; }
 
+# download + verify + flash; satellites first (they fetch the image from this router over the mesh)
+do_upgrade() {
+	url="$1"; sum="$2"; target="$3"
+	[ -n "$url" ] || return 1
+	rm -f /tmp/lightnet-upgrade.bin
+	curl -s -L -m 600 -o /tmp/lightnet-upgrade.bin "$url" || { log "upgrade download failed: $url"; return 1; }
+	have="$(sha256sum /tmp/lightnet-upgrade.bin | awk '{print $1}')"
+	[ -z "$sum" ] || [ "$have" = "$sum" ] || { log "upgrade checksum mismatch"; rm -f /tmp/lightnet-upgrade.bin; return 1; }
+	sysupgrade -T /tmp/lightnet-upgrade.bin >/dev/null 2>&1 || { log "upgrade image rejected"; rm -f /tmp/lightnet-upgrade.bin; return 1; }
+	TARGET_BUILD="$target" /usr/sbin/lightnet-satellite-upgrade stage /tmp/lightnet-upgrade.bin "$have" >/dev/null 2>&1
+	rm -f /www/lightnet-fw.bin /tmp/lightnet-fw/sysupgrade.bin
+	log "upgrading firmware to ${target:-$have}"
+	sysupgrade -k /tmp/lightnet-upgrade.bin >/dev/null 2>&1
+}
+
 run_commands() {
 	resp="$1"; n=0
 	while :; do
@@ -78,20 +93,35 @@ run_commands() {
 		case "$type" in
 			reboot) sleep 2; reboot ;;
 			reprovision) rm -f "$SERVER_JSON"; uci set lightnet.cloud.status='pending'; uci commit lightnet; state_set next_enroll 0 ;;
-			upgrade)
-				url="$(jq "$resp" "@.commands[$n].url")"; sum="$(jq "$resp" "@.commands[$n].sha256")"
-				[ -n "$url" ] && curl -s -L -m 600 -o /tmp/lightnet-upgrade.bin "$url" && {
-					have="$(sha256sum /tmp/lightnet-upgrade.bin | awk '{print $1}')"
-					if [ -z "$sum" ] || [ "$have" = "$sum" ]; then
-						# satellites first (they fetch the image from this router over the mesh), then the master
-						TARGET_BUILD="$(jq "$resp" "@.commands[$n].fw_build")" /usr/sbin/lightnet-satellite-upgrade stage /tmp/lightnet-upgrade.bin "$have" >/dev/null 2>&1
-						rm -f /www/lightnet-fw.bin /tmp/lightnet-fw/sysupgrade.bin
-						log "upgrading firmware"; sysupgrade -k /tmp/lightnet-upgrade.bin
-					else log "upgrade checksum mismatch"; rm -f /tmp/lightnet-upgrade.bin; fi
-				} ;;
+			upgrade) do_upgrade "$(jq "$resp" "@.commands[$n].url")" "$(jq "$resp" "@.commands[$n].sha256")" "$(jq "$resp" "@.commands[$n].fw_build")" ;;
 		esac
 		n=$((n + 1))
 	done
+}
+
+# Fleet auto-update: the heartbeat carries `latest` when the published build differs from ours.
+# Flash inside the maintenance window (server `update_window`, router override
+# lightnet.cloud.update_window = "HH-HH" local time or "any"); lightnet.cloud.auto_update=0 opts out.
+in_window() {
+	w="$1"; [ "$w" = any ] && return 0
+	from="${w%-*}"; to="${w#*-}"; h="$(date +%H)"
+	case "$from$to" in *[!0-9]*|"") return 1 ;; esac
+	h=$((10#$h)); from=$((10#$from)); to=$((10#$to))
+	if [ $from -le $to ]; then [ $h -ge $from ] && [ $h -lt $to ]; else [ $h -ge $from ] || [ $h -lt $to ]; fi
+}
+
+auto_update() {
+	resp="$1"
+	[ "$(uci -q get lightnet.cloud.auto_update || echo 1)" = "1" ] || return 0
+	target="$(jq "$resp" '@.latest.fw_build')"; state_set latest_build "$target"; [ -n "$target" ] || return 0
+	build="$(sed -n 's/^build=//p' "$FW_ID" 2>/dev/null)"
+	[ "$target" != "$build" ] || return 0
+	[ "$(sed -n 's/^tried_build=//p' "$STATE" 2>/dev/null)" = "$target" ] && return 0
+	w="$(uci -q get lightnet.cloud.update_window)"; [ -n "$w" ] || w="$(jq "$resp" '@.latest.window')"; [ -n "$w" ] || w="02-05"
+	in_window "$w" || { log "update $target available; waiting for window $w"; return 0; }
+	state_set tried_build "$target"
+	log "auto-update: $build -> $target"
+	do_upgrade "$(jq "$resp" '@.latest.url')" "$(jq "$resp" '@.latest.sha256')" "$target"
 }
 
 enroll() {
@@ -119,6 +149,7 @@ heartbeat() {
 	if [ "$(jq "$resp" '@.ok')" = "true" ]; then
 		state_set last_ok "$(date +%s)"; state_set last_error ""
 		run_commands "$resp"
+		auto_update "$resp"
 		[ "$(jq "$resp" '@.reenroll')" = "true" ] && state_set next_enroll 0
 		[ -s "$SERVER_JSON" ] && /usr/sbin/lightnet-hotspot ensure
 		return 0
@@ -133,10 +164,12 @@ status() {
 	hs="$(sed -n 's/^last_ok=//p' "$STATE" 2>/dev/null)"; err="$(sed -n 's/^last_error=//p' "$STATE" 2>/dev/null)"
 	wgup=false; hands=0
 	if ip link show wgln >/dev/null 2>&1; then wgup=true; hands="$(wg show wgln latest-handshakes 2>/dev/null | awk '{print $2}' | head -n1)"; fi
-	printf '{"enabled":%s,"url":"%s","status":"%s","router_id":"%s","site_id":"%s","site_name":"%s","wg_ip":"%s","wg_up":%s,"wg_handshake_age":%s,"last_ok":%s,"last_error":"%s","hotspot":%s}\n' \
+	printf '{"enabled":%s,"url":"%s","status":"%s","router_id":"%s","site_id":"%s","site_name":"%s","wg_ip":"%s","wg_up":%s,"wg_handshake_age":%s,"last_ok":%s,"last_error":"%s","fw_build":"%s","auto_update":%s,"update_window":"%s","latest_build":"%s","hotspot":%s}\n' \
 		"$(enabled && echo true || echo false)" "$(base_url)" "$st" "$(uci -q get lightnet.cloud.router_id)" "$(uci -q get lightnet.cloud.site_id)" \
 		"$(esc "$(uci -q get lightnet.cloud.site_name)")" "$(uci -q get lightnet.cloud.wg_ip)" "$wgup" \
-		"$([ "${hands:-0}" -gt 0 ] && echo $(( $(date +%s) - hands )) || echo null)" "${hs:-null}" "$(esc "$err")" "$(/usr/sbin/lightnet-hotspot status 2>/dev/null || echo null)"
+		"$([ "${hands:-0}" -gt 0 ] && echo $(( $(date +%s) - hands )) || echo null)" "${hs:-null}" "$(esc "$err")" \
+		"$(sed -n 's/^build=//p' "$FW_ID" 2>/dev/null)" "$([ "$(uci -q get lightnet.cloud.auto_update || echo 1)" = "1" ] && echo true || echo false)" \
+		"$(uci -q get lightnet.cloud.update_window || echo 02-05)" "$(sed -n 's/^latest_build=//p' "$STATE" 2>/dev/null)" "$(/usr/sbin/lightnet-hotspot status 2>/dev/null || echo null)"
 }
 
 once() {

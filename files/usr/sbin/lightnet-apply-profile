@@ -35,6 +35,8 @@ else
 	[ -n "$(uci -q get network.hotspot)" ] && /usr/sbin/lightnet-hotspot net off
 	client_net=lan
 fi
+channel24="$(jsonfilter -i "$PROFILE" -e '@.channel24' 2>/dev/null)"
+case "$channel24" in 1|6|11) uci set wireless.radio0.channel="$channel24" ;; esac
 for iface in default_radio0 default_radio1; do
 	uci set "wireless.$iface.network=$client_net"
 	uci set "wireless.$iface.mode=ap"

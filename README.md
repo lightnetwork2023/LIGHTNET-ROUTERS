@@ -107,6 +107,21 @@ Internet still requires the voucher on every port. `lan2` on the main and
 keeps its own default route (chilli hands out `192.168.88.1` as gateway;
 the technician PC uses `never-default` + a `/32` route to `192.168.2.1`).
 
+### Fleet behaviour (v0.9.16)
+
+- **Voucher ends → sign-in page**: the client is deauthenticated once; the
+  phone re-associates and its captive-portal probe brings the portal back.
+- **Status LED**: red = no network (detecting, pending, mesh lost, no data);
+  blue = main with Internet / satellite adopted and talking to the main.
+- **2.4 GHz channels**: main on 1, satellites alternate over the two other
+  non-overlapping channels (assigned by the main). 5 GHz is shared on purpose
+  (802.11s mesh and the 5 GHz AP use the same radio).
+- **Auto-update**: the server advertises the published build in every
+  heartbeat; a main whose build differs upgrades its satellites, then itself,
+  inside the maintenance window (default 02:00–05:00; `update_window=any`
+  for immediate). Publish a build (`is_latest=1`) to roll it out everywhere;
+  the owner dashboard "Upgrade" button still works for a single site.
+
 ## Web UI
 
 Custom **LightNet** theme on LuCI (replaces Bootstrap branding with
@@ -198,7 +213,7 @@ First boot takes ~2 min while the unit detects its role.
 - Private deployment project. `files/etc/lightnet/mesh.key` and the
   admin password hash in `files/etc/uci-defaults/99-lightnet-universal`
   are secrets — rotate before ever publishing.
-- Default login after flashing: `LIGHTNET` / `ROCKY221122`.
+- Default login after flashing: `LIGHTNET` / `LIGHTNET@221122` (v0.9.16+; older builds `ROCKY221122`).
 - The client SSID `LIGHTNET` is **open** by design (portal onboarding
   model); all management traffic is authenticated by session token,
   and mesh access requires the SAE key.

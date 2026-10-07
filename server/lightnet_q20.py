@@ -358,6 +358,18 @@ def register_routes(app, db_config, require_owner, billing_hooks=None):
             out = {'ok': True, 'status': r['status'], 'commands': cmds}
             if r['status'] == 'provisioned' and not r.get('wg_ip'):
                 out['reenroll'] = True
+            # Fleet auto-update: advertise the published build; the router upgrades itself (and
+            # its satellites first) when its build differs, inside the maintenance window.
+            # settings: auto_update ('1'/'0', default 1), update_window ('HH-HH' local router time
+            # or 'any', default '02-05'). Pushing a build = publish it with is_latest=1.
+            settings = _settings(cur)
+            if (settings.get('auto_update') or '1') == '1':
+                cur.execute('SELECT fw_build, sysupgrade_url, sysupgrade_sha256 FROM lightnet_firmware_builds '
+                            'WHERE allowed=1 AND is_latest=1 AND sysupgrade_url IS NOT NULL ORDER BY id DESC LIMIT 1')
+                b = cur.fetchone()
+                if b and b['fw_build'] != (data.get('fw_build') or r['fw_build']):
+                    out['latest'] = {'fw_build': b['fw_build'], 'url': b['sysupgrade_url'], 'sha256': b['sysupgrade_sha256'],
+                                     'window': settings.get('update_window') or '02-05'}
             return jsonify(out)
         except Exception as e:
             conn.rollback()

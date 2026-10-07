@@ -1,0 +1,54 @@
+#!/bin/sh
+# Kick a hotspot client off Wi-Fi once so the phone re-associates and re-runs its captive-portal
+# check (used when a voucher expires). The main kicks locally and publishes the MAC for the
+# satellites, which pick it up in their next inform response (<=15 s) and kick locally too.
+#   lightnet-kick queue MAC        main: kick here + publish for satellites (expires after 90 s)
+#   lightnet-kick local MAC        deauth MAC from every local AP interface
+#   lightnet-kick pending          JSON list for the inform response
+#   lightnet-kick apply 'mac=ts ...'  satellite: kick each entry not applied before
+Q=/tmp/lightnet-kick
+DONE=/tmp/lightnet-kick-done
+TTL=90
+
+norm() { printf '%s' "$1" | tr 'A-F-' 'a-f:' | tr -cd '0-9a-f:'; }
+
+local_kick() {
+	mac="$(norm "$1")"
+	case "$mac" in ??:??:??:??:??:??) ;; *) return 1 ;; esac
+	for i in $(ubus list 2>/dev/null | sed -n 's/^hostapd\.//p'); do
+		ubus call "hostapd.$i" del_client "{\"addr\":\"$mac\",\"reason\":5,\"deauth\":true,\"ban_time\":0}" >/dev/null 2>&1
+	done
+	logger -t lightnet-kick "deauthenticated $mac (voucher ended)"
+}
+
+case "$1" in
+	local) local_kick "$2" ;;
+	queue)
+		mac="$(norm "$2")"
+		case "$mac" in ??:??:??:??:??:??) ;; *) exit 1 ;; esac
+		mkdir -p "$Q"; date +%s >"$Q/$mac"
+		local_kick "$mac" ;;
+	pending)
+		now=$(date +%s); first=1; printf '['
+		for f in "$Q"/*; do
+			[ -f "$f" ] || continue
+			ts="$(cat "$f")"
+			[ $(( now - ts )) -gt $TTL ] && { rm -f "$f"; continue; }
+			[ $first = 1 ] || printf ','
+			printf '"%s=%s"' "$(basename "$f")" "$ts"; first=0
+		done
+		printf ']' ;;
+	apply)
+		mkdir -p "$DONE"; now=$(date +%s)
+		for e in $2; do
+			mac="${e%%=*}"; ts="${e##*=}"
+			[ -f "$DONE/$mac" ] && [ "$(cat "$DONE/$mac")" = "$ts" ] && continue
+			printf '%s' "$ts" >"$DONE/$mac"
+			local_kick "$mac"
+		done
+		# forget old markers
+		for f in "$DONE"/*; do [ -f "$f" ] && [ $(( now - $(cat "$f") )) -gt 3600 ] && rm -f "$f"; done
+		;;
+	*) echo "usage: $0 queue|local MAC | pending | apply 'mac=ts ...'"; exit 1 ;;
+esac
+exit 0

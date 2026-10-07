@@ -1,5 +1,6 @@
 #!/bin/sh
 
+/usr/sbin/lightnet-led red >/dev/null 2>&1 || true
 sleep 15
 /usr/sbin/lightnet-apply-role boot >/dev/null 2>&1 || true
 
@@ -41,5 +42,6 @@ while :; do
 
 	active="$(sed -n 's/^active_role=//p' /etc/lightnet/state 2>/dev/null | tail -n1)"
 	[ "$active" = "agent" ] && /usr/sbin/lightnet-inform >/dev/null 2>&1 || true
+	/usr/sbin/lightnet-led >/dev/null 2>&1 || true
 	sleep 15
 done

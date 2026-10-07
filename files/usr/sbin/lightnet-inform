@@ -69,6 +69,7 @@ for c in "[fd4c:6e65:7400::1]" "$controller"; do
 	[ -n "$response" ] && { controller="$c"; break; }
 done
 [ -n "$response" ] || exit 0
+touch /tmp/lightnet-inform.ok
 
 if printf '%s' "$response" | grep -q '"rejected"[ ]*:[ ]*true'; then
 	touch /tmp/lightnet-rejected
@@ -76,6 +77,11 @@ if printf '%s' "$response" | grep -q '"rejected"[ ]*:[ ]*true'; then
 	batctl if del mesh0 >/dev/null 2>&1
 	ip link set mesh0 down 2>/dev/null
 	exit 0
+fi
+
+if [ "$adopted" = 1 ]; then
+	kicks="$(printf '%s' "$response" | jsonfilter -e '@.kick[*]' 2>/dev/null | tr '\n' ' ')"
+	[ -n "$kicks" ] && /usr/sbin/lightnet-kick apply "$kicks" >/dev/null 2>&1
 fi
 
 if [ "$adopted" = 1 ] && printf '%s' "$response" | grep -q '"command"[ ]*:[ ]*"reset"'; then
@@ -111,6 +117,7 @@ if [ "$adopted" = 1 ] && grep -q '"state"[ ]*:[ ]*"pending"' /tmp/lightnet-confi
 	uci set wireless.default_radio0.disabled='1'
 	uci set wireless.default_radio1.disabled='1'
 	uci -q delete lightnet.wifi.applied_version
+	uci -q delete lightnet.wifi.applied_sig
 	uci commit lightnet
 	uci commit wireless
 	sed -i 's/^adopted=.*/adopted=0/' /etc/lightnet/state
@@ -118,12 +125,17 @@ if [ "$adopted" = 1 ] && grep -q '"state"[ ]*:[ ]*"pending"' /tmp/lightnet-confi
 	logger -t lightnet "adoption revoked by controller"
 fi
 if grep -q '"adopted"[ ]*:[ ]*true' /tmp/lightnet-config.json 2>/dev/null; then
+	# converge on the profile CONTENT (ssid/mode/key/hotspot/channel/portal_ready...), not on the
+	# version counter: a clean-flashed main restarts at 1 and a stale counter left satellites on
+	# the old SSID. management_ip is our own address and excluded.
+	newsig="$(sed 's/"management_ip":"[^"]*"//' /tmp/lightnet-config.json | md5sum | awk '{print $1}')"
+	oldsig="$(uci -q get lightnet.wifi.applied_sig)"
 	newver="$(jsonfilter -i /tmp/lightnet-config.json -e '@.config_version' 2>/dev/null)"
-	oldver="$(uci -q get lightnet.wifi.applied_version)"
 	want_hs="$(jsonfilter -i /tmp/lightnet-config.json -e '@.hotspot' 2>/dev/null)"; [ "$want_hs" = "true" ] || want_hs=false
 	have_hs=false; [ -n "$(uci -q get network.hotspot)" ] && have_hs=true
-	if [ "$newver" != "$oldver" ] || [ "$want_hs" != "$have_hs" ]; then
+	if [ "$newsig" != "$oldsig" ] || [ "$want_hs" != "$have_hs" ]; then
 		/usr/sbin/lightnet-apply-profile /tmp/lightnet-config.json && {
+			uci set lightnet.wifi.applied_sig="$newsig"
 			[ -n "$newver" ] && uci set lightnet.wifi.applied_version="$newver"
 			uci commit lightnet
 		}

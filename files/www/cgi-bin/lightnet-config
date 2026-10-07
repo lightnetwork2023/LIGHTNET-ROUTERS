@@ -23,5 +23,12 @@ ver="$(uci -q get lightnet.wifi.config_version || echo 1)"
 portal_ready=false
 { [ -f /etc/lightnet/portal.ready ] || [ "$(uci -q get lightnet.main.network_mode)" = "bridge" ]; } && portal_ready=true
 hotspot=false; [ -s /etc/lightnet/server.json ] && [ "$(uci -q get lightnet.cloud.status)" = "provisioned" ] && hotspot=true
-printf '{"adopted":true,"config_version":%s,"hostname":"%s","management_ip":"%s","gateway":"%s","portal_ready":%s,"hotspot":%s,"wifi":{"ssid":"%s","mode":"%s","encryption":"%s","key":"%s"},"bridge":true,"dhcp":false,"nat":false}\n' \
-	"$ver" "$(json_escape "$hostname")" "$ip" "$(json_escape "$(uci -q get lightnet.main.controller || echo 192.168.2.1)")" "$portal_ready" "$hotspot" "$(json_escape "$ssid")" "$(json_escape "$mode")" "$(json_escape "$enc")" "$(json_escape "$key")"
+# 2.4 GHz channel plan: the main uses its own channel, satellites rotate over the other two
+# non-overlapping channels by their position in adopted.list (5 GHz must stay shared: mesh).
+main24="$(uci -q get wireless.radio0.channel || echo 1)"
+idx="$(grep -ni "^$mac$" /etc/lightnet/adopted.list 2>/dev/null | cut -d: -f1 | head -n1)"
+[ -n "$idx" ] || idx=1
+others=""; for c in 1 6 11; do [ "$c" = "$main24" ] || others="$others $c"; done
+set -- $others; [ $(( idx % 2 )) -eq 1 ] && channel24="$1" || channel24="$2"
+printf '{"adopted":true,"config_version":%s,"hostname":"%s","management_ip":"%s","gateway":"%s","portal_ready":%s,"hotspot":%s,"channel24":%s,"wifi":{"ssid":"%s","mode":"%s","encryption":"%s","key":"%s"},"bridge":true,"dhcp":false,"nat":false}\n' \
+	"$ver" "$(json_escape "$hostname")" "$ip" "$(json_escape "$(uci -q get lightnet.main.controller || echo 192.168.2.1)")" "$portal_ready" "$hotspot" "${channel24:-6}" "$(json_escape "$ssid")" "$(json_escape "$mode")" "$(json_escape "$enc")" "$(json_escape "$key")"
