@@ -1,0 +1,11 @@
+# Bridge-family hook: the only place where the ingress *port* of a br-hotspot frame is known.
+# Mark frames from wired client ports (root lan1, satellites' wired VLAN bat0.11) so that
+# table inet fw4 (90-lightnet-hotspot.nft) can learn their IPs into @ln_wired.
+table bridge lightnet
+flush table bridge lightnet
+table bridge lightnet {
+	chain wired_mark {
+		type filter hook prerouting priority -300; policy accept;
+		iifname { "lan1", "bat0.11" } ether type ip meta mark set 0x4c counter comment "!LightNet: wired hotspot client"
+	}
+}

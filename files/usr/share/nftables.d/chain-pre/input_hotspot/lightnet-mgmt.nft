@@ -1,0 +1,5 @@
+# Management page from the hotspot (tun0): wired clients without a voucher, Wi-Fi clients
+# only after chilli authenticated them. Everything else to 22/80/443 is refused.
+tcp dport { 22, 80, 443 } ip saddr @ln_wired counter accept comment "!LightNet: wired client -> management, no voucher"
+tcp dport { 22, 80, 443 } ip saddr @ln_authed counter accept comment "!LightNet: authenticated client -> management"
+tcp dport { 22, 80, 443 } counter reject with tcp reset comment "!LightNet: unauthenticated Wi-Fi client -> management refused"

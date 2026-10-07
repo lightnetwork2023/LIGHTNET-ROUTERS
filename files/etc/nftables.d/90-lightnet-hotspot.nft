@@ -6,7 +6,30 @@
 # traffic). Drop at the raw prerouting hook: AF_PACKET taps have already seen
 # the frame, so chilli is unaffected, and nothing from br-hotspot reaches
 # conntrack/forward/input.
+#
+# Before dropping, remember which hotspot clients arrived over a WIRED port:
+# table bridge lightnet marks frames entering br-hotspot via lan1 (root) or
+# bat0.11 (satellite wired ports) with 0x4c. Those IPs may open the management
+# page (tcp 22/80/443 via tun0) without a voucher; Wi-Fi clients only once
+# chilli has authenticated them (ln_authed, maintained by lightnet-chilli-hook).
+
+set ln_wired {
+	type ipv4_addr
+	flags dynamic,timeout
+	timeout 10m
+	size 1024
+	comment "hotspot clients seen on a wired client port"
+}
+
+set ln_authed {
+	type ipv4_addr
+	flags timeout
+	size 1024
+	comment "hotspot clients with a valid chilli session"
+}
+
 chain lightnet_hotspot_l2_raw {
 	type filter hook prerouting priority raw; policy accept;
+	iifname "br-hotspot" meta mark 0x4c ip saddr 192.168.88.0/24 update @ln_wired { ip saddr } counter comment "!LightNet: learn wired hotspot clients"
 	iifname "br-hotspot" counter drop comment "!LightNet: chilli owns br-hotspot; keep client frames out of the IP stack"
 }

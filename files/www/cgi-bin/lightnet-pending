@@ -11,6 +11,7 @@ derive_mac() {
 	printf '02:%s:%s:%s:%s:%02x' "$2" "$3" "$4" "$5" $(( (0x$6 + off) & 255 ))
 }
 
+now="$(date +%s)"
 printf '{"nodes":['
 first=1
 for f in /etc/lightnet/inform/*.json; do
@@ -18,6 +19,9 @@ for f in /etc/lightnet/inform/*.json; do
 	mac="$(basename "$f" .json | tr 'A-F' 'a-f')"
 	adopted=0
 	grep -qi "^$mac$" /etc/lightnet/adopted.list 2>/dev/null && adopted=1
+	age=$(( now - $(stat -c %Y "$f" 2>/dev/null || echo "$now") ))
+	# a unit that stopped informing (off, moved, became a root) must not sit in "waiting for approval"
+	[ "$adopted" = 0 ] && [ "$age" -gt 600 ] && continue
 	wmac="$(derive_mac "$mac" 4)"
 	mmac="$(derive_mac "$mac" 5)"
 	wired=0
@@ -33,6 +37,6 @@ for f in /etc/lightnet/inform/*.json; do
 	[ $first -eq 0 ] && printf ','
 	first=0
 	alias="$(head -n1 "/etc/lightnet/names/$mac" 2>/dev/null | tr -cd "A-Za-z0-9 ._'-")"
-	printf '{"device_id":"%s","name":"%s","adopted":%s,"rejected":%s,"wired":%s,"wireless":%s,"backhaul":"%s","inform":%s}' "$mac" "$alias" "$adopted" "$rejected" "$wired" "$wireless" "$backhaul" "$(tr -d '\n' <"$f")"
+	printf '{"device_id":"%s","name":"%s","adopted":%s,"rejected":%s,"wired":%s,"wireless":%s,"backhaul":"%s","last_seen":%s,"inform":%s}' "$mac" "$alias" "$adopted" "$rejected" "$wired" "$wireless" "$backhaul" "$age" "$(tr -d '\n' <"$f")"
 done
 printf ']}\n'

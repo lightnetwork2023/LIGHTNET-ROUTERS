@@ -27,6 +27,8 @@ fi
 if [ "$action" = "remove" ]; then
 	sed -i "/^$mac$/d" /etc/lightnet/adopted.list 2>/dev/null
 	rm -f "/etc/lightnet/names/$mac" "/etc/lightnet/rejected/$mac"
+	# forget it now; an unplugged/powered-off unit never fetches the reset and would stay "pending" forever
+	rm -f "/etc/lightnet/inform/$mac.json" "/etc/lightnet/inform/$mac.token" "/tmp/lightnet-seen/$mac"
 	mkdir -p /tmp/lightnet-cmd
 	echo reset >"/tmp/lightnet-cmd/$mac"
 	logger -t lightnet "removed $mac; factory reset queued"

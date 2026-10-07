@@ -133,6 +133,7 @@ for f in /etc/lightnet/inform/*.json; do
 	ip="$(jsonfilter -i "$f" -e '@.ip' 2>/dev/null)"
 	adopted=0
 	grep -qi "^$mac$" /etc/lightnet/adopted.list 2>/dev/null && adopted=1
+	[ "$adopted" = 0 ] && [ $(( $(date +%s) - $(stat -c %Y "$f" 2>/dev/null || date +%s) )) -gt 600 ] && continue
 	UPL_MAC="$(jsonfilter -i "$f" -e '@.uplink_mac' 2>/dev/null)"
 	UPL_IF="$(jsonfilter -i "$f" -e '@.uplink_iface' 2>/dev/null)"
 	UPL_TQ="$(jsonfilter -i "$f" -e '@.uplink_tq' 2>/dev/null)"

@@ -1,0 +1,11 @@
+#!/bin/sh
+# CoovaChilli conup/condown hook (via lightnet-chilli-conup / -condown): keeps fw4's ln_authed
+# set (hotspot IPs with a valid session) in step with chilli, so authenticated Wi-Fi clients may
+# open the management page. chilli exports FRAMED_IP_ADDRESS and passes no arguments.
+ip="$FRAMED_IP_ADDRESS"
+case "$ip" in *.*.*.*) ;; *) exit 0 ;; esac
+case "$1" in
+	down) nft delete element inet fw4 ln_authed "{ $ip }" 2>/dev/null ;;
+	*) nft add element inet fw4 ln_authed "{ $ip timeout 2d }" 2>/dev/null ;;
+esac
+exit 0
