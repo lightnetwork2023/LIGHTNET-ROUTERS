@@ -1,16 +1,44 @@
 #!/bin/sh
+# Device identity = factory label MAC (DT label-mac-device -> gmac0, Factory NVMEM).
+# Pinned once in /etc/lightnet/device.mac so the ID never changes across reboots,
+# even if interface MACs are rewritten (wan/lan2 get a locally administered 02:… MAC).
 
 what="$1"
-base=""
-for dev in lan1 wan eth0; do
-	[ -r "/sys/class/net/$dev/address" ] || continue
-	candidate="$(cat "/sys/class/net/$dev/address")"
-	case "$candidate" in
-		??:??:??:??:??:??) base="$candidate"; break ;;
-	esac
-done
+pin=/etc/lightnet/device.mac
 
-[ -z "$base" ] && base="$(cat /sys/class/net/br-lan/address 2>/dev/null)"
+valid_mac() {
+	case "$1" in
+		??:??:??:??:??:??) ;;
+		*) return 1 ;;
+	esac
+	case "$1" in
+		00:00:00:00:00:00|ff:ff:ff:ff:ff:ff|FF:FF:FF:FF:FF:FF) return 1 ;;
+	esac
+	# reject locally administered addresses (bit 1 of the first octet)
+	[ $(( 0x${1%%:*} & 2 )) -eq 0 ]
+}
+
+base="$(cat "$pin" 2>/dev/null | tr 'A-F' 'a-f')"
+valid_mac "$base" || base=""
+
+if [ -z "$base" ]; then
+	. /lib/functions.sh
+	. /lib/functions/system.sh
+	base="$(get_mac_label 2>/dev/null | tr 'A-F' 'a-f')"
+	valid_mac "$base" || base=""
+fi
+
+if [ -z "$base" ]; then
+	for dev in eth0 lan1 wan; do
+		[ -r "/sys/class/net/$dev/address" ] || continue
+		candidate="$(cat "/sys/class/net/$dev/address" | tr 'A-F' 'a-f')"
+		valid_mac "$candidate" && { base="$candidate"; break; }
+	done
+fi
+
+[ -z "$base" ] && exit 1
+
+[ -s "$pin" ] || { mkdir -p /etc/lightnet && printf '%s\n' "$base" > "$pin" 2>/dev/null; }
 
 OIFS="$IFS"
 IFS=':'
