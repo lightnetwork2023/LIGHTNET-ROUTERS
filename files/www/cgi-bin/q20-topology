@@ -45,7 +45,7 @@ emit_node() {
 		SSH=1
 	else
 		seen="$(date -r "/tmp/lightnet-seen/$LANMAC" +%s 2>/dev/null)"
-		if [ -n "$seen" ] && [ $((NOW - seen)) -le 45 ]; then
+		if [ -n "$seen" ] && [ $((NOW - seen)) -le 20 ]; then
 			ONLINE=1
 		else
 			[ -n "$IP" ] && ping -c 1 -W 1 "$IP" >/dev/null 2>&1 && ONLINE=1
@@ -67,8 +67,8 @@ emit_node() {
 	if [ "$SELF_NODE" = 1 ] || [ "$ROLE" = "main" ]; then
 		PATH_TEXT="local"
 	else
-		printf '%s\n' "$BATN" | grep -qi "$WMAC" && WIRED=1
-		printf '%s\n' "$BATN" | grep -qi "$MMAC" && WIRELESS=1
+		BATN="$BATN" /usr/sbin/lightnet-mesh-up "$WMAC" wired 10 && WIRED=1
+		BATN="$BATN" /usr/sbin/lightnet-mesh-up "$MMAC" mesh0 10 && WIRELESS=1
 		if [ "$WIRED" = 1 ] || [ "$WIRELESS" = 1 ]; then ONLINE=1; fi
 		if [ "$WIRED" = 1 ] && [ "$WIRELESS" = 1 ]; then
 			PATH_TEXT="wired+wireless"

@@ -53,12 +53,12 @@ satellites_json() {
 		fw="$(jsonfilter -i "$f" -e '@.firmware' 2>/dev/null)"
 		seen="$(stat -c %Y "/tmp/lightnet-seen/$m" 2>/dev/null || echo 0)"
 		online=false
-		[ $(( $(date +%s) - seen )) -lt 120 ] && online=true
+		[ $(( $(date +%s) - seen )) -lt 20 ] && online=true
 		if [ "$online" != true ]; then
 			wmac="$(derive_mac "$m" 4)"
 			mmac="$(derive_mac "$m" 5)"
-			printf '%s\n' "$BATN" | grep -qi "$wmac" && online=true
-			printf '%s\n' "$BATN" | grep -qi "$mmac" && online=true
+			BATN="$BATN" /usr/sbin/lightnet-mesh-up "$wmac" wired 10 && online=true
+			BATN="$BATN" /usr/sbin/lightnet-mesh-up "$mmac" mesh0 10 && online=true
 		fi
 		[ $first = 1 ] || printf ','
 		printf '{"mac":"%s","hostname":"%s","name":"%s","signal":%s,"fw_build":"%s","online":%s}' "$m" "$(esc "$host")" "$(esc "$name")" "${sig:-null}" "$(esc "$fw")" "$online"

@@ -26,8 +26,8 @@ for f in /etc/lightnet/inform/*.json; do
 	mmac="$(derive_mac "$mac" 5)"
 	wired=0
 	wireless=0
-	printf '%s\n' "$BATN" | awk -v mac="$wmac" 'NR > 2 && tolower($2) == mac && $1 != "mesh0" { found=1 } END { exit !found }' && wired=1
-	printf '%s\n' "$BATN" | awk -v mac="$mmac" 'NR > 2 && tolower($2) == mac && $1 == "mesh0" { found=1 } END { exit !found }' && wireless=1
+	BATN="$BATN" /usr/sbin/lightnet-mesh-up "$wmac" wired 10 && wired=1
+	BATN="$BATN" /usr/sbin/lightnet-mesh-up "$mmac" mesh0 10 && wireless=1
 	backhaul="unknown"
 	[ "$wired" = 1 ] && [ "$wireless" = 1 ] && backhaul="wired+wireless"
 	[ "$wired" = 1 ] && [ "$wireless" = 0 ] && backhaul="wired"

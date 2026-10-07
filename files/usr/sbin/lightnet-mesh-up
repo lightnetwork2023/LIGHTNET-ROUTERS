@@ -1,0 +1,26 @@
+#!/bin/sh
+# Fresh batman neighbour? batctl n keeps stale origins for minutes; only
+# count last-seen within MAX seconds (default 10).
+#   lightnet-mesh-up <mac> [mesh0|wired|any] [max_s]
+# Optional env BATN = already-captured `batctl n` output.
+mac="$(printf '%s' "$1" | tr 'A-F' 'a-f')"
+want="${2:-any}"
+max="${3:-10}"
+[ -n "$mac" ] || exit 1
+[ -n "$BATN" ] || BATN="$(batctl n 2>/dev/null)"
+printf '%s\n' "$BATN" | awk -v mac="$mac" -v want="$want" -v max="$max" '
+BEGIN { mac = tolower(mac) }
+NR <= 2 { next }
+{
+	iface = $1
+	neigh = tolower($2)
+	last = $NF
+	sub(/s$/, "", last)
+	if (neigh != mac) next
+	if ((last + 0) > max) next
+	if (want == "any") found = 1
+	else if (want == "mesh0" && iface == "mesh0") found = 1
+	else if (want == "wired" && iface != "mesh0") found = 1
+}
+END { exit !found }
+'
