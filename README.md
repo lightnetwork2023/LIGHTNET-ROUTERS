@@ -116,7 +116,7 @@ the technician PC uses `never-default` + a `/32` route to `192.168.2.1`).
 - **2.4 GHz channels**: main on 1, satellites alternate over the two other
   non-overlapping channels (assigned by the main). 5 GHz is shared on purpose
   (802.11s mesh and the 5 GHz AP use the same radio).
-- **Auto-update**: the server advertises the published build in every
+- **Auto-update (pending, off by default)**: the server advertises the published build in every
   heartbeat; a main whose build differs upgrades its satellites, then itself,
   inside the maintenance window (default 02:00–05:00; `update_window=any`
   for immediate). Publish a build (`is_latest=1`) to roll it out everywhere;

@@ -112,7 +112,7 @@ in_window() {
 
 auto_update() {
 	resp="$1"
-	[ "$(uci -q get lightnet.cloud.auto_update || echo 1)" = "1" ] || return 0
+	[ "$(uci -q get lightnet.cloud.auto_update || echo 0)" = "1" ] || return 0
 	target="$(jq "$resp" '@.latest.fw_build')"; state_set latest_build "$target"; [ -n "$target" ] || return 0
 	build="$(sed -n 's/^build=//p' "$FW_ID" 2>/dev/null)"
 	[ "$target" != "$build" ] || return 0
@@ -168,7 +168,7 @@ status() {
 		"$(enabled && echo true || echo false)" "$(base_url)" "$st" "$(uci -q get lightnet.cloud.router_id)" "$(uci -q get lightnet.cloud.site_id)" \
 		"$(esc "$(uci -q get lightnet.cloud.site_name)")" "$(uci -q get lightnet.cloud.wg_ip)" "$wgup" \
 		"$([ "${hands:-0}" -gt 0 ] && echo $(( $(date +%s) - hands )) || echo null)" "${hs:-null}" "$(esc "$err")" \
-		"$(sed -n 's/^build=//p' "$FW_ID" 2>/dev/null)" "$([ "$(uci -q get lightnet.cloud.auto_update || echo 1)" = "1" ] && echo true || echo false)" \
+		"$(sed -n 's/^build=//p' "$FW_ID" 2>/dev/null)" "$([ "$(uci -q get lightnet.cloud.auto_update || echo 0)" = "1" ] && echo true || echo false)" \
 		"$(uci -q get lightnet.cloud.update_window || echo 02-05)" "$(sed -n 's/^latest_build=//p' "$STATE" 2>/dev/null)" "$(/usr/sbin/lightnet-hotspot status 2>/dev/null || echo null)"
 }
 
