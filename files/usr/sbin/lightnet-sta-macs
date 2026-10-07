@@ -1,0 +1,5 @@
+#!/bin/sh
+# Associated hotspot client MACs on this unit's AP radios (not mesh0).
+for i in phy0-ap0 phy1-ap0; do
+	iw dev "$i" station dump 2>/dev/null | awk '/^Station / { print tolower($2) }'
+done

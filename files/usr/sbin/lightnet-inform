@@ -28,10 +28,14 @@ else
 	backhaul="unknown"
 fi
 clients=0
-for i in phy0-ap0 phy1-ap0; do
-	n="$(iw dev "$i" station dump 2>/dev/null | grep -c '^Station')"
-	clients=$((clients + ${n:-0}))
+stas='['
+sep=''
+for m in $(/usr/sbin/lightnet-sta-macs 2>/dev/null); do
+	clients=$((clients + 1))
+	stas="$stas$sep\"$m\""
+	sep=','
 done
+stas="$stas]"
 macs_in() { grep -io '[0-9a-f]\{2\}\(:[0-9a-f]\{2\}\)\{5\}' | tr 'A-F' 'a-f'; }
 uplink_mac=""; uplink_iface=""; uplink_tq=0; uplink_signal=""; uplink_rate=""
 cmac="$(ip neigh show "$controller" dev br-lan 2>/dev/null | macs_in | head -n1)"
@@ -59,9 +63,9 @@ token="$(cat /etc/lightnet/device.token 2>/dev/null)"
 
 [ "$role" != "agent" ] && exit 0
 
-json=$(printf '{"device_id":"%s","onboarding_token":"%s","board":"jcg,q20-pb-boot","model":"%s","firmware":"%s","hostname":"%s","ip":"%s","role":"agent","state":"%s","wired_carrier":%s,"wired_backhaul":%s,"wireless_backhaul":%s,"backhaul":"%s","mesh_established":%s,"mesh_signal_dbm":%s,"uptime":%s,"boot_id":"%s","clients":%s,"uplink_mac":"%s","uplink_iface":"%s","uplink_tq":%s,"uplink_signal_dbm":%s,"uplink_rate_mbit":%s}' \
+json=$(printf '{"device_id":"%s","onboarding_token":"%s","board":"jcg,q20-pb-boot","model":"%s","firmware":"%s","hostname":"%s","ip":"%s","role":"agent","state":"%s","wired_carrier":%s,"wired_backhaul":%s,"wireless_backhaul":%s,"backhaul":"%s","mesh_established":%s,"mesh_signal_dbm":%s,"uptime":%s,"boot_id":"%s","clients":%s,"uplink_mac":"%s","uplink_iface":"%s","uplink_tq":%s,"uplink_signal_dbm":%s,"uplink_rate_mbit":%s,"stas":%s}' \
 	"$mac" "$token" "$model" "$firmware" "$hostname" "$ip" "$( [ "$adopted" = 1 ] && echo adopted || echo pending )" "${wired:-0}" "$wired_backhaul" "$wireless_backhaul" "$backhaul" "${meshsta:-0}" "${signal:-null}" "${uptime:-0}" "$boot_id" "$clients" \
-	"$uplink_mac" "$uplink_iface" "${uplink_tq:-0}" "${uplink_signal:-null}" "${uplink_rate:-null}")
+	"$uplink_mac" "$uplink_iface" "${uplink_tq:-0}" "${uplink_signal:-null}" "${uplink_rate:-null}" "$stas")
 
 response=""
 for c in "[fd4c:6e65:7400::1]" "$controller"; do

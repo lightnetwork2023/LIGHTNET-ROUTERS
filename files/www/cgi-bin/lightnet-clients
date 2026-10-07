@@ -1,0 +1,83 @@
+#!/bin/sh
+# Per-AP hotspot users: this main's radios + each satellite's last inform STA list,
+# matched to chilli_query (IP, voucher, session, bytes).
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\r\n' ' '; }
+norm() { printf '%s' "$1" | tr 'A-F' 'a-f' | tr '-' ':' | tr -cd '0-9a-f:'; }
+printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+/usr/sbin/lightnet-admin-auth || { printf '{"ok":false,"error":"authentication required"}\n'; exit 0; }
+
+CH=/tmp/lightnet-chilli.tsv
+: >"$CH"
+if [ -S /var/run/lightnet-chilli.sock ]; then
+	chilli_query -s /var/run/lightnet-chilli.sock list 2>/dev/null | awk '{
+		mac=tolower($1); gsub(/-/,":",mac)
+		ip=$2; state=$3; auth=$5; user=$6
+		split($7,d,"/"); split($8,id,"/"); split($9,rx,"/"); split($10,tx,"/")
+		url=$NF; if (url=="-") url=""
+		printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", mac, ip, state, auth, user, d[1]+0, id[1]+0, rx[1]+0, tx[1]+0, url
+	}' >"$CH"
+fi
+
+lookup() {
+	awk -F'\t' -v m="$1" '$1==m { print; exit }' "$CH"
+}
+
+emit_user() {
+	mac="$1"
+	line="$(lookup "$mac")"
+	ip=""; state="wifi"; auth=0; user=""; sess=0; idle=0; rx=0; tx=0; url=""
+	if [ -n "$line" ]; then
+		ip="$(printf '%s' "$line" | cut -f2)"
+		state="$(printf '%s' "$line" | cut -f3)"
+		auth="$(printf '%s' "$line" | cut -f4)"
+		user="$(printf '%s' "$line" | cut -f5)"
+		sess="$(printf '%s' "$line" | cut -f6)"
+		idle="$(printf '%s' "$line" | cut -f7)"
+		rx="$(printf '%s' "$line" | cut -f8)"
+		tx="$(printf '%s' "$line" | cut -f9)"
+		url="$(printf '%s' "$line" | cut -f10)"
+	fi
+	[ "$UFIRST" = 1 ] || printf ','
+	UFIRST=0
+	printf '{"mac":"%s","ip":"%s","username":"%s","state":"%s","authenticated":%s,"session_s":%s,"idle_s":%s,"rx":%s,"tx":%s,"url":"%s"}' \
+		"$(json_escape "$mac")" "$(json_escape "$ip")" "$(json_escape "$user")" "$(json_escape "$state")" \
+		"$([ "$auth" = 1 ] && echo true || echo false)" "${sess:-0}" "${idle:-0}" "${rx:-0}" "${tx:-0}" "$(json_escape "$url")"
+}
+
+emit_ap() {
+	role="$1"; mac="$2"; host="$3"; name="$4"; stas="$5"
+	mac="$(norm "$mac")"
+	[ -n "$mac" ] || return
+	[ "$AFIRST" = 1 ] || printf ','
+	AFIRST=0
+	printf '{"mac":"%s","role":"%s","hostname":"%s","name":"%s","users":[' \
+		"$(json_escape "$mac")" "$(json_escape "$role")" "$(json_escape "$host")" "$(json_escape "$name")"
+	UFIRST=1
+	n=0
+	for sm in $stas; do
+		sm="$(norm "$sm")"
+		[ -n "$sm" ] || continue
+		emit_user "$sm"
+		n=$((n + 1))
+	done
+	printf '],"clients":%s}' "$n"
+}
+
+printf '{"ok":true,"aps":['
+AFIRST=1
+SELF_MAC="$(/usr/sbin/lightnet-macs id 2>/dev/null | tr 'A-F' 'a-f')"
+SELF_HOST="$(uci -q get system.@system[0].hostname || cat /proc/sys/kernel/hostname)"
+SELF_NAME="$(head -n1 /etc/lightnet/names/$(norm "$SELF_MAC") 2>/dev/null)"
+emit_ap "main" "$SELF_MAC" "$SELF_HOST" "${SELF_NAME:-$SELF_HOST}" "$(/usr/sbin/lightnet-sta-macs 2>/dev/null)"
+
+for f in /etc/lightnet/inform/*.json; do
+	[ -f "$f" ] || continue
+	mac="$(jsonfilter -i "$f" -e '@.device_id' 2>/dev/null | tr 'A-F' 'a-f')"
+	case "$mac" in ??:??:??:??:??:??) ;; *) continue ;; esac
+	grep -qi "^$mac$" /etc/lightnet/adopted.list 2>/dev/null || continue
+	host="$(jsonfilter -i "$f" -e '@.hostname' 2>/dev/null)"
+	name="$(head -n1 "/etc/lightnet/names/$mac" 2>/dev/null)"
+	stas="$(jsonfilter -i "$f" -e '@.stas[*]' 2>/dev/null | tr '\n' ' ')"
+	emit_ap "satellite" "$mac" "$host" "$name" "$stas"
+done
+printf ']}\n'
