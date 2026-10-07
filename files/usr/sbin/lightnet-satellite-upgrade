@@ -78,16 +78,31 @@ main_build() {
 	sed -n 's/^build=//p' /rom/etc/lightnet/firmware.id /etc/lightnet/firmware.id 2>/dev/null | head -n1
 }
 
+# Identity of the image THIS main is running. First flash onto a new build never
+# wrote fleet-fw (the old image did not know to), so invent it from firmware.id.
+ensure_fleet() {
+	target="$(main_build)"
+	[ -n "$target" ] || return 1
+	have_b="$(sed -n 's/^fw_build=//p' /etc/lightnet/fleet-fw 2>/dev/null | head -n1)"
+	url="$(sed -n 's/^url=//p' /etc/lightnet/fleet-fw 2>/dev/null | head -n1)"
+	sum="$(sed -n 's/^sha256=//p' /etc/lightnet/fleet-fw 2>/dev/null | head -n1)"
+	if [ "$have_b" != "$target" ] || [ -z "$url" ]; then
+		url="https://lightnetwork.pro/firmware/q20/q20-lightnet-${target}-sysupgrade.bin"
+		sum=""
+	fi
+	mkdir -p /etc/lightnet
+	printf 'fw_build=%s\nsha256=%s\nurl=%s\n' "$target" "$sum" "$url" > /etc/lightnet/fleet-fw
+}
+
 # After the main has flashed, re-fetch the published image and queue any adopted
 # satellite that came back on an older build (missed the original 4-minute window).
 catchup() {
 	[ "$(sed -n 's/^active_role=//p' /etc/lightnet/state 2>/dev/null | tail -n1)" = "root" ] || return 0
-	[ -s /etc/lightnet/fleet-fw ] || return 0
+	ensure_fleet || return 0
 	target="$(sed -n 's/^fw_build=//p' /etc/lightnet/fleet-fw | head -n1)"
 	sum="$(sed -n 's/^sha256=//p' /etc/lightnet/fleet-fw | head -n1)"
 	url="$(sed -n 's/^url=//p' /etc/lightnet/fleet-fw | head -n1)"
 	[ -n "$target" ] && [ -n "$url" ] || return 0
-	[ "$target" = "$(main_build)" ] || return 0
 	stale=""
 	now=$(date +%s)
 	for m in $(cat /etc/lightnet/adopted.list 2>/dev/null); do
@@ -100,10 +115,14 @@ catchup() {
 		stale="$stale $m"
 	done
 	[ -n "$stale" ] || return 0
-	if [ ! -s "$WWW" ] || [ "$(cat "$FW_DIR/sha256" 2>/dev/null)" != "$sum" ]; then
+	if [ ! -s "$WWW" ] || { [ -n "$sum" ] && [ "$(cat "$FW_DIR/sha256" 2>/dev/null)" != "$sum" ]; }; then
 		log "catchup: downloading fleet image $target for$stale"
 		mkdir -p "$FW_DIR"
 		curl -s -L -m 600 -o "$FW_DIR/sysupgrade.bin" "$url" || { log "catchup download failed"; return 1; }
+		have="$(sha256sum "$FW_DIR/sysupgrade.bin" | awk '{print $1}')"
+		[ -z "$sum" ] && sum="$have"
+		[ "$have" = "$sum" ] || { log "catchup checksum mismatch"; return 1; }
+		printf 'fw_build=%s\nsha256=%s\nurl=%s\n' "$target" "$sum" "$url" > /etc/lightnet/fleet-fw
 	fi
 	NOWAIT=1 TARGET_BUILD="$target" stage "$FW_DIR/sysupgrade.bin" "$sum" $stale
 }

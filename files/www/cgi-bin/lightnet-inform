@@ -85,15 +85,14 @@ if [ -n "$pending_cmd" ] && { [ "$adopted" = 1 ] || [ "$pending_cmd" = "reset" ]
 	[ "$command" = "reset" ] && rm -f "/etc/lightnet/inform/$macfile.json" "/etc/lightnet/inform/$macfile.token" "/tmp/lightnet-seen/$macfile"
 	logger -t lightnet "sent '$command' to $macfile"
 fi
-# Mesh AP came back on an older build: push the fleet image if it is already staged.
-if [ -z "$command" ] && [ "$adopted" = 1 ] && [ "$pending_cmd" != "reset" ] && [ -s /etc/lightnet/fleet-fw ]; then
-	fleet_build="$(sed -n 's/^fw_build=//p' /etc/lightnet/fleet-fw | head -n1)"
+# Mesh AP came back on an older build: push the fleet image (or start the download).
+if [ -z "$command" ] && [ "$adopted" = 1 ] && [ "$pending_cmd" != "reset" ]; then
 	main_build="$(sed -n 's/^build=//p' /rom/etc/lightnet/firmware.id /etc/lightnet/firmware.id 2>/dev/null | head -n1)"
 	sat_fw="$(jsonfilter -i "/etc/lightnet/inform/$macfile.json" -e '@.firmware' 2>/dev/null)"
-	if [ -n "$fleet_build" ] && [ "$fleet_build" = "$main_build" ] && [ "$sat_fw" != "$fleet_build" ]; then
+	if [ -n "$main_build" ] && [ "$sat_fw" != "$main_build" ]; then
 		if [ -s /tmp/lightnet-fw/sha256 ] && [ -e /www/lightnet-fw.bin ]; then
 			command="upgrade"
-			logger -t lightnet "catchup upgrade $macfile ($sat_fw -> $fleet_build)"
+			logger -t lightnet "catchup upgrade $macfile ($sat_fw -> $main_build)"
 		else
 			flock -n /tmp/lightnet-fw.catchup.lock /usr/sbin/lightnet-satellite-upgrade catchup >/dev/null 2>&1 &
 		fi
