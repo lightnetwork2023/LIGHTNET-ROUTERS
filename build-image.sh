@@ -1,9 +1,20 @@
 #!/bin/sh
 set -eu
 
-IB="/home/francis/immortalwrt-imagebuilder-23.05.4-ramips-mt7621"
-REPO="/home/francis/q20-lightnet"
+IB="${IB:-$HOME/immortalwrt-imagebuilder-23.05.4-ramips-mt7621}"
+REPO="${REPO:-$(cd "$(dirname "$0")" && pwd)}"
 FILES="$REPO/files"
+
+# Ubuntu 25.10+ ships uutils coreutils; the ImageBuilder prereq check needs GNU ones (gnu-prefixed).
+if ! install --version 2>/dev/null | grep -q GNU && [ -x /usr/bin/gnuinstall ]; then
+	shim="$IB/.gnu-coreutils"
+	mkdir -p "$shim"
+	for f in $(dpkg -L gnu-coreutils | grep '^/usr/bin/gnu'); do
+		ln -sf "$f" "$shim/${f#/usr/bin/gnu}"
+	done
+	PATH="$shim:$PATH"
+	export PATH
+fi
 
 # Stamp the firmware identity used by zero-touch enrollment (lightnet-cloud).
 cd "$REPO"

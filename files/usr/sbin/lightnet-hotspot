@@ -43,7 +43,7 @@ portal_url() {
 	cat >"$WWWDIR/config.js" <<EOF
 window.LIGHTNET={owner:"$(jsq "$owner")",site:"$(jsq "$site")",api:"$(jsq "$api")",ssid:"$(jsq "$(jget '@.site.ssid')")",phone:"$(jsq "$(jget '@.site.contact_phone')")",plans:$plans,uamip:"$HS_GW",uamport:"3990"};
 EOF
-	printf 'http://%s:3990/www/lightnet.html?v=4&owner=%s&site=%s' "$HS_GW" "$owner" "$site"
+	printf 'http://%s:3990/www/lightnet.html?v=10&owner=%s&site=%s' "$HS_GW" "$owner" "$site"
 }
 
 active_role() { sed -n 's/^active_role=//p' /etc/lightnet/state 2>/dev/null | tail -n1; }

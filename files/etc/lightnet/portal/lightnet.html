@@ -2,77 +2,118 @@
 <html lang="sw">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <title>Internet WIFI — lightNET</title>
+  <title>Nunua Internet</title>
   <style>
-    :root { --bg:#f5f5f5; --ink:#222; --muted:#555; --line:#ddd; --accent:#e91e8c; --footer:#1a1a1a; }
-    * { box-sizing:border-box; }
-    body { margin:0; font-family:Arial,Helvetica,sans-serif; background:var(--bg); color:var(--ink); min-height:100vh; display:flex; flex-direction:column; }
-    .wrap { flex:1; display:flex; justify-content:center; align-items:flex-start; padding:12px 20px 24px; }
-    .main { max-width:400px; width:100%; }
-    .logo { display:block; margin:0 auto 14px; width:168px; height:auto; border-radius:12px; }
-    h1 { font-size:20px; text-align:center; margin:0 0 4px; }
-    .sub { text-align:center; color:var(--muted); margin:0 0 18px; font-size:14px; }
-    .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:14px; }
-    .form-group { margin-bottom:12px; }
-    label { font-size:13px; color:var(--muted); }
-    select, input { width:100%; padding:12px; border:1px solid var(--line); border-radius:4px; margin-top:4px; background:#fff; color:#000; font-size:16px; }
-    select:disabled, input:disabled { opacity:.75; background:#f0f0f0; }
-    .btn { width:100%; padding:13px 20px; border:0; border-radius:4px; background:var(--accent); color:#fff; font-size:16px; font-weight:bold; cursor:pointer; display:block; text-align:center; text-decoration:none; }
-    .btn:disabled { opacity:.6; }
-    .btn.ghost { background:#fff; color:var(--accent); border:1px solid var(--accent); }
-    .msg { font-size:14px; margin:10px 0 0; text-align:center; color:var(--muted); }
-    .err { color:#c62828; }
-    .ok { color:#2e7d32; }
-    .code { font-size:24px; letter-spacing:2px; text-align:center; font-weight:bold; margin:10px 0; display:none; }
-    .spin { display:none; margin:10px auto; width:26px; height:26px; border:3px solid #eee; border-top-color:var(--accent); border-radius:50%; animation:s 1s linear infinite; }
-    @keyframes s { to { transform:rotate(360deg); } }
-    .mac { font-size:12px; color:#999; text-align:center; margin-top:8px; }
-    footer { background:var(--footer); color:#eee; text-align:center; padding:12px; font-size:14px; }
-    footer a { color:#fff; }
-    .tabs { display:flex; gap:8px; margin-bottom:14px; }
-    .tabs button { flex:1; padding:10px; border:1px solid var(--line); background:#fff; border-radius:6px; font-size:15px; cursor:pointer; }
-    .tabs button.on { border-color:var(--accent); color:var(--accent); font-weight:bold; }
-    .pane { display:none; } .pane.on { display:block; }
+    :root {
+      --bg: #f4f1f6;
+      --card: #fff;
+      --ink: #161018;
+      --muted: #6b6270;
+      --line: #ece7ee;
+      --accent: #e2187a;
+      --accent-dark: #c01268;
+      --accent-soft: #fde7f2;
+      --shadow: 0 10px 30px rgba(22, 16, 24, .08);
+      --radius: 18px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background:
+        radial-gradient(1200px 420px at 50% -80px, #fbcfe8 0%, transparent 70%),
+        var(--bg);
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .wrap { flex: 1; display: flex; justify-content: center; padding: 28px 18px 28px; }
+    .main { width: 100%; max-width: 420px; }
+    .logo {
+      display: block; margin: 0 auto 18px; width: 132px; height: auto;
+      border-radius: 22px; box-shadow: var(--shadow);
+    }
+    .hint { text-align: center; color: var(--muted); margin: 0 0 18px; font-size: 15px; line-height: 1.4; }
+    .tabs { display: flex; gap: 8px; background: #fff; padding: 6px; border-radius: 14px; margin-bottom: 16px; box-shadow: var(--shadow); }
+    .tabs button {
+      flex: 1; border: 0; background: transparent; padding: 11px 8px; border-radius: 10px;
+      font-size: 14px; font-weight: 650; color: var(--muted); cursor: pointer;
+    }
+    .tabs button.on { background: var(--accent); color: #fff; }
+    .plans { display: flex; flex-direction: column; gap: 10px; }
+    .plan {
+      width: 100%; text-align: left; border: 1px solid var(--line); background: var(--card);
+      border-radius: var(--radius); padding: 16px 16px 16px 18px; cursor: pointer;
+      display: flex; align-items: center; gap: 12px; box-shadow: var(--shadow);
+    }
+    .plan:active { transform: scale(.985); }
+    .plan-name { font-size: 16px; font-weight: 750; margin: 0 0 2px; }
+    .plan-meta { font-size: 13px; color: var(--muted); margin: 0; }
+    .plan-price {
+      margin-left: auto; background: var(--accent-soft); color: var(--accent-dark);
+      font-weight: 800; font-size: 15px; padding: 8px 12px; border-radius: 999px; white-space: nowrap;
+    }
+    .empty, .msg { text-align: center; color: var(--muted); font-size: 14px; }
+    .err { color: #c2185b; }
+    .ok { color: #1b7a3d; }
+    .card { background: var(--card); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
+    .notice { display: none; margin-bottom: 14px; }
+    .pane { display: none; } .pane.on { display: block; }
+    .form-group { margin-bottom: 12px; }
+    input {
+      width: 100%; padding: 14px 14px; border: 1px solid var(--line); border-radius: 12px;
+      font-size: 16px; background: #fff; color: var(--ink);
+    }
+    input:focus { outline: 2px solid #f9a8d4; border-color: var(--accent); }
+    .btn {
+      width: 100%; padding: 14px 18px; border: 0; border-radius: 12px; background: var(--accent);
+      color: #fff; font-size: 16px; font-weight: 750; cursor: pointer; text-decoration: none; display: block; text-align: center;
+    }
+    .btn:disabled { opacity: .55; }
+    .btn.ghost { background: #fff; color: var(--accent); border: 1.5px solid var(--accent); }
+    .spin { display: none; margin: 12px auto; width: 26px; height: 26px; border: 3px solid #f3e5ee; border-top-color: var(--accent); border-radius: 50%; animation: s .8s linear infinite; }
+    @keyframes s { to { transform: rotate(360deg); } }
+    .mac { font-size: 12px; color: #9a9098; text-align: center; margin-top: 14px; }
+    footer { text-align: center; padding: 14px 16px 22px; color: var(--muted); font-size: 14px; }
+    footer a { color: var(--accent); font-weight: 700; text-decoration: none; }
+    .scrim {
+      display: none; position: fixed; inset: 0; background: rgba(22, 16, 24, .45);
+      z-index: 20; align-items: flex-end; justify-content: center; padding: 16px;
+    }
+    .scrim.on { display: flex; }
+    .sheet {
+      width: min(420px, 100%); background: #fff; border-radius: 22px 22px 18px 18px;
+      padding: 10px 18px 20px; box-shadow: 0 20px 50px rgba(0,0,0,.2);
+    }
+    .grab { width: 42px; height: 4px; border-radius: 99px; background: #e5dde8; margin: 6px auto 12px; }
+    .sheet h2 { margin: 0 0 4px; font-size: 18px; }
+    .sheet .sub { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+    .net { min-height: 18px; font-size: 13px; color: var(--accent-dark); font-weight: 650; margin: 6px 0 12px; }
+    .sheet-actions { display: flex; gap: 8px; margin-top: 8px; }
+    .sheet-actions .btn { flex: 1; }
   </style>
 </head>
 <body>
   <div class="wrap"><div class="main">
     <img class="logo" src="logo.png" alt="lightNET" onerror="this.style.display='none'" />
-    <h1 id="ssid">LIGHTNET Wi‑Fi</h1>
-    <p class="sub" id="siteName">Nunua vocha au ingiza code yako ili kuunganishwa.</p>
+    <p class="hint" id="siteName">Chagua kifurushi cha internet</p>
 
-    <div class="card" id="notice" style="display:none"><p class="msg" id="noticeMsg"></p><div id="noticeActions"></div></div>
+    <div class="card notice" id="notice"><p class="msg" id="noticeMsg"></p><div id="noticeActions"></div></div>
 
     <div class="tabs">
-      <button type="button" id="tabBuy" class="on" onclick="showPane('buy')">Nunua Vocha</button>
-      <button type="button" id="tabCode" onclick="showPane('code')">Nina Code</button>
+      <button type="button" id="tabBuy" class="on" onclick="showPane('buy')">Nunua</button>
+      <button type="button" id="tabCode" onclick="showPane('code')">Nina code</button>
     </div>
 
-    <div class="card pane on" id="paneBuy">
-      <form id="buyForm" onsubmit="return submitBuy(event)">
-        <div class="form-group">
-          <select id="provider" required>
-            <option value="">Chagua mtandao</option>
-            <option>Mpesa</option><option>Tigo</option><option>Airtel</option><option>Halopesa</option><option>Azampesa</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <input type="tel" id="phone" placeholder="namba ya simu (mfano, 0617462707)" inputmode="tel" autocomplete="tel" pattern="[0-9+]{9,13}" required />
-        </div>
-        <div class="form-group">
-          <select id="plan_id" required><option value="">Inapakia vifurushi…</option></select>
-        </div>
-        <button type="submit" class="btn" id="payBtn">Nunua Vocha</button>
-        <div class="spin" id="spin"></div>
-        <p class="msg" id="statusMsg"></p>
-        <p class="code" id="codeBox"></p>
-        <div id="paidActions"></div>
-        <p class="msg err" id="errorMessage"></p>
-      </form>
+    <div class="pane on" id="paneBuy">
+      <div class="plans" id="plans"></div>
+      <p class="empty" id="plansEmpty">Inapakia vifurushi…</p>
+      <p class="msg err" id="errorMessage"></p>
     </div>
 
     <div class="card pane" id="paneCode">
@@ -87,17 +128,35 @@
 
     <div class="mac" id="clientMac"></div>
   </div></div>
-  <footer><div>Msaada piga: <a id="supportTel" href="tel:"></a></div></footer>
+  <footer><div>Msaada piga <a id="supportTel" href="tel:"></a></div></footer>
+
+  <div class="scrim" id="scrim" onclick="if(event.target===this && !paying) closePay()">
+    <div class="sheet" role="dialog" aria-modal="true">
+      <div class="grab"></div>
+      <h2 id="payTitle">Kifurushi</h2>
+      <p class="sub" id="paySub"></p>
+      <form id="buyForm" onsubmit="return submitBuy(event)">
+        <input type="tel" id="phone" placeholder="Namba ya simu" inputmode="tel" autocomplete="tel" pattern="[0-9+]{9,13}" required />
+        <div class="net" id="netHint"></div>
+        <div class="spin" id="spin"></div>
+        <p class="msg" id="statusMsg"></p>
+        <div id="paidActions"></div>
+        <p class="msg err" id="payErr"></p>
+        <div class="sheet-actions">
+          <button type="button" class="btn ghost" id="payCancel" onclick="closePay()">Rudi</button>
+          <button type="submit" class="btn" id="payBtn">Lipa</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <script src="config.js"></script>
   <script>
-    // Router-hosted LightNet portal for CoovaChilli. Chilli appends its UAM params
-    // (res, uamip, uamport, challenge, mac, ip, userurl, reason) to this URL; the page talks
-    // to the LightNet server API cross-origin (CORS), same model as the UniFi/TP-Link portals.
     var CFG = window.LIGHTNET || {};
     var API = (CFG.api || 'https://lightnet.lightnetwork.pro').replace(/\/+$/, '');
     var PASS = CFG.password || 'ROCKY221122';
     var POLL_MS = 3000, MAX_POLLS = 40, pollTimer = null, pollCount = 0, pollDone = false;
+    var selectedPlan = null, paying = false;
 
     function qs(n) { try { return (new URL(location.href).searchParams.get(n) || '').trim(); } catch (e) { return ''; } }
     function $(id) { return document.getElementById(id); }
@@ -119,11 +178,98 @@
     }
     function showErr(t) { $('errorMessage').textContent = t || ''; }
     function setStatus(t) { $('statusMsg').textContent = t || ''; }
-    function lock(l) {
-      ['provider', 'phone', 'plan_id'].forEach(function (id) { $(id).disabled = l; });
-      $('payBtn').disabled = l; $('spin').style.display = l ? 'block' : 'none';
+    function setHelpPhone(num) {
+      num = String(num || '').replace(/\s+/g, '');
+      if (!num) return;
+      $('supportTel').textContent = num;
+      $('supportTel').href = 'tel:' + num;
     }
-    function unlock() { pollDone = true; if (pollTimer) clearTimeout(pollTimer); lock(false); setStatus(''); $('codeBox').style.display = 'none'; $('paidActions').innerHTML = ''; }
+
+    function localPhone(v) {
+      var p = (v || '').replace(/\D/g, '');
+      if (p.startsWith('255')) p = '0' + p.slice(3);
+      return p;
+    }
+    function validTzPhone(v) {
+      return /^0[67]\d{8}$/.test(localPhone(v));
+    }
+    function detectProvider(v) {
+      var pref = localPhone(v).slice(0, 3);
+      if (['072', '074', '075', '076', '079'].indexOf(pref) >= 0) return 'Mpesa';
+      if (['065', '067', '070', '071', '077'].indexOf(pref) >= 0) return 'Tigo';
+      if (['068', '069', '078'].indexOf(pref) >= 0) return 'Airtel';
+      if (['061', '062'].indexOf(pref) >= 0) return 'Halopesa';
+      return '';
+    }
+    function moneyTsh(n) {
+      return 'TSH ' + Number(n || 0).toLocaleString();
+    }
+    function planLabels(mins, fallbackName) {
+      mins = Number(mins || 0);
+      var known = {
+        240: { sw: 'Masaa Manne', en: '4 Hours' },
+        1440: { sw: 'Siku moja', en: '24 Hours' },
+        10080: { sw: 'Wiki', en: '7 Days' },
+        43200: { sw: 'Mwezi', en: '30 Days' }
+      };
+      if (known[mins]) return known[mins];
+      var sw, en;
+      if (!mins) return { sw: fallbackName || 'Kifurushi', en: fallbackName || '' };
+      if (mins < 60) { sw = mins + ' dakika'; en = mins + ' minutes'; }
+      else if (mins < 1440) {
+        var h = Math.round(mins / 60);
+        sw = h === 1 ? 'Saa 1' : ('Masaa ' + h);
+        en = h === 1 ? '1 Hour' : (h + ' Hours');
+      } else {
+        var d = Math.round(mins / 1440);
+        sw = d === 1 ? 'Siku moja' : ('Siku ' + d);
+        en = d === 1 ? '1 Day' : (d + ' Days');
+      }
+      return { sw: sw, en: fallbackName || en };
+    }
+    $('phone').addEventListener('input', function () {
+      var d = detectProvider(this.value);
+      if (d) $('netHint').textContent = 'Mtandao: ' + d;
+      else if (validTzPhone(this.value)) $('netHint').textContent = 'Tutagundua mtandao';
+      else $('netHint').textContent = '';
+    });
+
+    function openPay(plan) {
+      selectedPlan = plan;
+      paying = false;
+      var labels = planLabels(plan.duration_minutes, plan.name);
+      $('payTitle').textContent = labels.sw;
+      $('paySub').textContent = labels.en + ' · ' + moneyTsh(plan.price_tzs);
+      $('phone').value = '';
+      $('netHint').textContent = '';
+      $('payErr').textContent = '';
+      setStatus('');
+      $('paidActions').innerHTML = '';
+      $('spin').style.display = 'none';
+      $('payBtn').disabled = false;
+      $('scrim').classList.add('on');
+      setTimeout(function () { $('phone').focus(); }, 200);
+    }
+    function closePay() {
+      if (paying) return;
+      pollDone = true;
+      if (pollTimer) clearTimeout(pollTimer);
+      $('scrim').classList.remove('on');
+    }
+
+    function lock(l) {
+      paying = l;
+      $('phone').disabled = l;
+      $('payBtn').disabled = l;
+      $('payCancel').disabled = l;
+      $('spin').style.display = l ? 'block' : 'none';
+    }
+    function unlock() {
+      pollDone = true;
+      if (pollTimer) clearTimeout(pollTimer);
+      lock(false);
+      setStatus('');
+    }
 
     function submitCode(e) {
       e.preventDefault();
@@ -132,22 +278,6 @@
       location.href = logonUrl(c);
       return false;
     }
-
-    function detectProvider(v) {
-      var p = (v || '').replace(/\D/g, '');
-      if (p.startsWith('255')) p = '0' + p.slice(3);
-      var pref = p.slice(0, 3);
-      // TCRA numbering plan 2025: 079 Vodacom, 078 Airtel, 077 Yas (ex-Zantel)
-      if (['074', '075', '076', '079'].indexOf(pref) >= 0) return 'Mpesa';
-      if (['065', '067', '071', '077'].indexOf(pref) >= 0) return 'Tigo';
-      if (['068', '069', '078'].indexOf(pref) >= 0) return 'Airtel';
-      if (['061', '062'].indexOf(pref) >= 0) return 'Halopesa';
-      return '';
-    }
-    $('phone').addEventListener('input', function () {
-      var d = detectProvider(this.value); if (!d) return;
-      var sel = $('provider'); for (var i = 0; i < sel.options.length; i++) if (sel.options[i].text === d) { sel.selectedIndex = i; break; }
-    });
 
     function schedulePoll(id) { if (pollDone) return; if (pollTimer) clearTimeout(pollTimer); pollTimer = setTimeout(function () { pollOnce(id); }, POLL_MS); }
     async function pollOnce(id) {
@@ -161,7 +291,6 @@
         if (p.status === 'paid' && p.voucher) {
           pollDone = true;
           setStatus('Imelipwa — inakuunganisha…');
-          // chilli runs with nouamsuccess: /logon sends the phone straight to userurl, no portal hop
           location.replace(logonUrl(p.voucher));
           return;
         }
@@ -169,41 +298,80 @@
           setStatus('Thibitisha malipo kwenye simu…');
           if (pollCount < MAX_POLLS) { schedulePoll(id); return; }
           pollDone = true; $('spin').style.display = 'none';
+          $('payBtn').disabled = false;
+          $('payCancel').disabled = false;
+          paying = false;
           setStatus('Bado inasubiri. Kama umelipa, bonyeza Angalia tena.');
           $('paidActions').innerHTML = '<button type="button" class="btn ghost" id="again">Angalia tena</button>';
           $('again').onclick = function () { startPoll(id); };
           return;
         }
-        showErr(p.error || 'Malipo hayajafanikiwa'); unlock();
+        $('payErr').textContent = p.error || 'Malipo hayajafanikiwa';
+        unlock();
       } catch (e) { setStatus('Inaangalia tena…'); schedulePoll(id); }
     }
-    function startPoll(id) { pollDone = false; pollCount = 0; lock(true); setStatus('Thibitisha malipo kwenye simu…'); $('codeBox').style.display = 'none'; $('paidActions').innerHTML = ''; pollOnce(id); }
+    function startPoll(id) {
+      pollDone = false; pollCount = 0; lock(true);
+      setStatus('Thibitisha malipo kwenye simu…');
+      $('paidActions').innerHTML = '';
+      pollOnce(id);
+    }
 
     async function submitBuy(e) {
-      e.preventDefault(); showErr(''); lock(true); setStatus('Inatuma ombi…');
+      e.preventDefault();
+      $('payErr').textContent = '';
+      if (!selectedPlan) return false;
+      var phone = $('phone').value.trim();
+      if (!validTzPhone(phone)) { $('payErr').textContent = 'Weka namba sahihi ya simu'; return false; }
+      var provider = detectProvider(phone);
+      lock(true); setStatus('Inatuma ombi…');
       try {
+        var body = {
+          owner_id: Number(OWNER), site_id: Number(SITE || 0),
+          plan_id: Number(selectedPlan.id), phone: phone, client_mac: MAC
+        };
+        if (provider) body.provider = provider;
         var r = await fetch(API + '/api/buy', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ owner_id: Number(OWNER), site_id: Number(SITE || 0), plan_id: Number($('plan_id').value),
-                                 phone: $('phone').value.trim(), client_mac: MAC,
-                                 provider: $('provider').value })
+          body: JSON.stringify(body)
         });
         var data = await r.json();
         if (!data.success) throw new Error(data.error || 'Malipo yameshindikana');
         startPoll(data.payment_id);
-      } catch (err) { showErr(err.message); unlock(); }
+      } catch (err) { $('payErr').textContent = err.message; unlock(); }
       return false;
     }
 
+    function renderPlans(plans) {
+      var box = $('plans');
+      box.innerHTML = '';
+      plans = plans || [];
+      if (!plans.length) {
+        $('plansEmpty').textContent = 'Hakuna vifurushi kwa sasa';
+        $('plansEmpty').style.display = 'block';
+        return;
+      }
+      $('plansEmpty').style.display = 'none';
+      plans.forEach(function (p) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'plan';
+        var labels = planLabels(p.duration_minutes, p.name);
+        b.innerHTML = '<div><p class="plan-name"></p><p class="plan-meta"></p></div><div class="plan-price"></div>';
+        b.querySelector('.plan-name').textContent = labels.sw;
+        b.querySelector('.plan-meta').textContent = labels.en;
+        b.querySelector('.plan-price').textContent = moneyTsh(p.price_tzs);
+        b.onclick = function () { openPay(p); };
+        box.appendChild(b);
+      });
+    }
+
     async function boot() {
-      if (CFG.ssid) $('ssid').textContent = CFG.ssid + ' Wi‑Fi';
-      if (CFG.phone) { $('supportTel').textContent = CFG.phone; $('supportTel').href = 'tel:' + CFG.phone; }
+      setHelpPhone(CFG.phone);
       $('clientMac').textContent = MAC ? 'Kifaa: ' + MAC : '';
       var res = qs('res');
       if (res === 'failed') { notice('Code si sahihi, imeisha muda au inatumika kwenye kifaa kingine.', 'err'); showPane('code'); }
       else if (res === 'success' || res === 'already') {
-        // Connected: do not wait for a tap — go to the page the customer wanted. Captive-portal
-        // webviews (iOS CNA / Android) close by themselves once the probe sees the Internet.
         var go = USERURL || 'http://neverssl.com/';
         notice(res === 'success' ? 'Umeunganishwa! Inakupeleka kwenye Internet…' : 'Tayari umeunganishwa.', 'ok',
                '<a class="btn" href="' + go + '">Endelea</a>');
@@ -212,26 +380,18 @@
         return;
       }
       else if (res === 'logoff') { notice('Umetoka. Ingiza code tena ukitaka kuendelea.', ''); showPane('code'); }
-      if (!OWNER && !SITE) { showErr('Router haijasajiliwa bado'); $('buyForm').style.display = 'none'; return; }
-      function fillPlans(plans) {
-        var sel = $('plan_id'); sel.innerHTML = '<option value="">Chagua Kifurushi</option>';
-        (plans || []).forEach(function (p) { var o = document.createElement('option'); o.value = p.id; o.textContent = p.name + ' — ' + p.price_tzs + ' TSH'; sel.appendChild(o); });
-        if (!(plans || []).length) { sel.innerHTML = '<option value="">Hakuna vifurushi kwa sasa</option>'; }
-      }
-      // Router pre-fetches plans into config.js so the list appears immediately without client DNS.
-      if (CFG.plans && CFG.plans.length) { fillPlans(CFG.plans); return; }
+      if (!OWNER && !SITE) { showErr('Router haijasajiliwa bado'); return; }
+      if (CFG.plans && CFG.plans.length) { renderPlans(CFG.plans); return; }
       try {
         var r = await fetch(API + '/api/buy/bootstrap?owner=' + encodeURIComponent(OWNER) + '&site=' + encodeURIComponent(SITE) + '&mac=' + encodeURIComponent(MAC), { cache: 'no-store' });
         var data = await r.json();
-        if (!data.success) { showErr(data.error || 'Kiungo si sahihi'); $('buyForm').style.display = 'none'; return; }
+        if (!data.success) { showErr(data.error || 'Kiungo si sahihi'); return; }
         OWNER = data.owner.id; if (data.site) SITE = data.site.id;
-        if (data.site && data.site.name) $('siteName').textContent = data.site.name;
-        if (data.owner.phone) { $('supportTel').textContent = data.owner.phone; $('supportTel').href = 'tel:' + data.owner.phone; }
-        fillPlans(data.plans);
+        setHelpPhone((data.site && data.site.contact_phone) || CFG.phone || (data.owner && data.owner.phone));
+        renderPlans(data.plans);
       } catch (e) {
-        $('plan_id').innerHTML = '<option value="">Vifurushi havikupakia</option>';
-        showErr('Imeshindikana kufikia seva ya LightNet. Jaribu tena.');
-        $('paidActions').innerHTML = '<button type="button" class="btn ghost" onclick="location.reload()">Jaribu tena</button>';
+        $('plansEmpty').textContent = 'Vifurushi havikupakia';
+        showErr('Imeshindikana kufikia seva. Jaribu tena.');
       }
     }
     boot();

@@ -69,11 +69,12 @@ for admin even without an IPv4 lease.
 ### Per-unit identity
 
 The device ID (`lightnet-macs id`) is the **factory label MAC** from the
-device tree (`label-mac-device` → gmac0, Factory NVMEM), pinned once in
-`/etc/lightnet/device.mac` and preserved across upgrades. It never
-depends on the runtime address of `lan1`/`wan`/`eth0`, so a reboot can
-no longer change the identity a controller or the cloud knows the unit by
-(v0.9.13; earlier builds could flip to the rewritten `02:…` WAN MAC).
+Q20 Factory EEPROM at `0x3fff4`, pinned in `/etc/lightnet/device.id` and
+preserved across upgrades. Factory is re-read every boot so a wrong first
+pin cannot stick. A leftover `/etc/lightnet/device.mac` from v0.9.13 is
+copied once into `device.id`. Identity never follows the runtime address
+of `lan1`/`wan`/`eth0`, so a reboot cannot mint a new device for adopt
+(v0.9.18; earlier builds could flip to a rewritten `02:` / `fa:` MAC).
 
 All other MACs are derived from it (`usr/sbin/lightnet-macs`) so nothing
 on the network collides:

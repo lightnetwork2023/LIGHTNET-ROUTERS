@@ -69,6 +69,7 @@ emit_node() {
 	else
 		printf '%s\n' "$BATN" | grep -qi "$WMAC" && WIRED=1
 		printf '%s\n' "$BATN" | grep -qi "$MMAC" && WIRELESS=1
+		if [ "$WIRED" = 1 ] || [ "$WIRELESS" = 1 ]; then ONLINE=1; fi
 		if [ "$WIRED" = 1 ] && [ "$WIRELESS" = 1 ]; then
 			PATH_TEXT="wired+wireless"
 		elif [ "$WIRED" = 1 ]; then

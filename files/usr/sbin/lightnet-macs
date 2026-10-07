@@ -1,50 +1,146 @@
 #!/bin/sh
-# Device identity = factory label MAC (DT label-mac-device -> gmac0, Factory NVMEM).
-# Pinned once in /etc/lightnet/device.mac so the ID never changes across reboots,
-# even if interface MACs are rewritten (wan/lan2 get a locally administered 02:… MAC).
+# Stable device identity for inform/adopt.
+# Factory EEPROM 0x3fff4 is the source of truth; pin lives in /etc/lightnet/device.id.
+# Never follow a random lan1/eth0 MAC: that made mesh APs look like a new
+# device after reboot (fa:/3e: locally administered addresses).
 
-what="$1"
-pin=/etc/lightnet/device.mac
+ID_FILE="${LIGHTNET_ID_FILE:-/etc/lightnet/device.id}"
+what="${1:-id}"
 
-valid_mac() {
-	case "$1" in
-		??:??:??:??:??:??) ;;
-		*) return 1 ;;
-	esac
-	case "$1" in
-		00:00:00:00:00:00|ff:ff:ff:ff:ff:ff|FF:FF:FF:FF:FF:FF) return 1 ;;
-	esac
-	# reject locally administered addresses (bit 1 of the first octet)
-	[ $(( 0x${1%%:*} & 2 )) -eq 0 ]
+norm() {
+	printf '%s' "$1" | tr 'A-F' 'a-f'
 }
 
-base="$(cat "$pin" 2>/dev/null | tr 'A-F' 'a-f')"
-valid_mac "$base" || base=""
+is_mac() {
+	case "$1" in
+		[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f])
+			return 0 ;;
+	esac
+	return 1
+}
 
-if [ -z "$base" ]; then
-	. /lib/functions.sh
-	. /lib/functions/system.sh
-	base="$(get_mac_label 2>/dev/null | tr 'A-F' 'a-f')"
-	valid_mac "$base" || base=""
-fi
+# Unicast and universally administered (not 02:/fa:/3e: kernel/wifi random).
+is_stable() {
+	mac="$(norm "$1")"
+	is_mac "$mac" || return 1
+	case "$mac" in
+		00:00:00:00:00:00|ff:ff:ff:ff:ff:ff) return 1 ;;
+	esac
+	first=$((0x${mac%%:*}))
+	[ $((first & 3)) -eq 0 ]
+}
 
-if [ -z "$base" ]; then
-	for dev in eth0 lan1 wan; do
-		[ -r "/sys/class/net/$dev/address" ] || continue
-		candidate="$(cat "/sys/class/net/$dev/address" | tr 'A-F' 'a-f')"
-		valid_mac "$candidate" && { base="$candidate"; break; }
+mtd_part() {
+	[ -r /proc/mtd ] || return 1
+	sed -n "s/^\\(mtd[0-9][0-9]*\\):.*\"$1\".*/\\1/p" /proc/mtd | head -n1
+}
+
+read_mtd_mac() {
+	# $1 partition name (Factory), $2 skip bytes (decimal or 0x…)
+	name="$1"
+	skip="$2"
+	mac=""
+	if [ -z "$LIGHTNET_MACS_FACTORY" ] && [ -r /lib/functions/system.sh ]; then
+		mac="$(
+			. /lib/functions.sh 2>/dev/null
+			. /lib/functions/system.sh 2>/dev/null
+			mtd_get_mac_binary "$name" "$skip" 2>/dev/null
+		)"
+		mac="$(norm "$mac")"
+		is_mac "$mac" && { printf '%s' "$mac"; return 0; }
+	fi
+	part="$(mtd_part "$name")"
+	[ -n "$part" ] || part="$(mtd_part "$(printf '%s' "$name" | tr 'A-Z' 'a-z')")"
+	[ -n "$part" ] || return 1
+	dev=""
+	for cand in "/dev/${part}ro" "/dev/mtdblock${part#mtd}" "/dev/$part"; do
+		[ -e "$cand" ] || continue
+		dev="$cand"
+		break
 	done
+	[ -n "$dev" ] || return 1
+	raw="$(dd if="$dev" bs=1 skip=$((skip)) count=6 2>/dev/null | od -An -tx1 -N6)"
+	mac="$(printf '%s' "$raw" | awk '{printf "%s:%s:%s:%s:%s:%s\n", $1,$2,$3,$4,$5,$6}' | tr 'A-F' 'a-f')"
+	is_mac "$mac" || return 1
+	printf '%s' "$mac"
+}
+
+factory_label() {
+	if [ -n "$LIGHTNET_MACS_FACTORY" ]; then
+		mac="$(norm "$LIGHTNET_MACS_FACTORY")"
+		is_stable "$mac" || return 1
+		printf '%s' "$mac"
+		return 0
+	fi
+	# JCG Q20: 0x3fff4 lan/label, 0x3fffa wan, 0x4 wifi.
+	for spec in "Factory 0x3fff4" "factory 0x3fff4" "Factory 0x4" "factory 0x4"; do
+		name="${spec%% *}"
+		off="${spec##* }"
+		mac="$(read_mtd_mac "$name" "$off" 2>/dev/null)"
+		if is_stable "$mac"; then
+			printf '%s' "$mac"
+			return 0
+		fi
+	done
+	return 1
+}
+
+load_saved() {
+	# LIGHTNET v0.9.13 stored the pin as device.mac; copy once into device.id.
+	if [ ! -s "$ID_FILE" ] && [ -s /etc/lightnet/device.mac ]; then
+		mkdir -p "$(dirname "$ID_FILE")"
+		head -n1 /etc/lightnet/device.mac | tr 'A-F' 'a-f' | tr -cd '0-9a-f:\n' > "$ID_FILE"
+	fi
+	[ -s "$ID_FILE" ] || return 1
+	mac="$(head -n1 "$ID_FILE" | tr 'A-F' 'a-f' | tr -cd '0-9a-f:')"
+	is_mac "$mac" || return 1
+	printf '%s' "$mac"
+}
+
+save_id() {
+	dir="$(dirname "$ID_FILE")"
+	mkdir -p "$dir"
+	printf '%s\n' "$1" > "$ID_FILE"
+}
+
+iface_mac() {
+	want_stable="$1"
+	for dev in lan1 wan eth0 br-lan; do
+		[ -r "/sys/class/net/$dev/address" ] || continue
+		candidate="$(norm "$(cat "/sys/class/net/$dev/address")")"
+		is_mac "$candidate" || continue
+		if [ "$want_stable" = 1 ]; then
+			is_stable "$candidate" || continue
+		fi
+		printf '%s' "$candidate"
+		return 0
+	done
+	return 1
+}
+
+saved="$(load_saved)"
+factory="$(factory_label)"
+base=""
+
+if is_stable "$factory"; then
+	base="$factory"
+elif is_mac "$saved"; then
+	# Keep the first identity we ever stored so reboot cannot mint a new one.
+	base="$saved"
+else
+	base="$(iface_mac 1)"
+	[ -n "$base" ] || base="$(iface_mac 0)"
 fi
 
-[ -z "$base" ] && exit 1
+base="$(norm "$base")"
+is_mac "$base" || exit 1
 
-[ -s "$pin" ] || { mkdir -p /etc/lightnet && printf '%s\n' "$base" > "$pin" 2>/dev/null; }
+[ "$saved" = "$base" ] || save_id "$base"
 
 OIFS="$IFS"
 IFS=':'
 set -- $base
 IFS="$OIFS"
-
 [ $# -ne 6 ] && exit 1
 
 case "$what" in

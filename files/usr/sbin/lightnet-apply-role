@@ -132,9 +132,16 @@ remote_controller_alive() {
 
 set_base_macs() {
 	[ -f /etc/config/wireless ] || touch /etc/config/wireless
+	idmac="$(/usr/sbin/lightnet-macs id)"
 	wanmac="$(/usr/sbin/lightnet-macs wan)"
 	meshmac="$(/usr/sbin/lightnet-macs mesh)"
 	batmac="$(/usr/sbin/lightnet-macs bat0)"
+	# Pin lan1 to the stable identity so DSA cannot randomize it on reboot.
+	[ -n "$idmac" ] && {
+		uci set network.dev_lan1=device
+		uci set network.dev_lan1.name='lan1'
+		uci set network.dev_lan1.macaddr="$idmac"
+	}
 	[ -n "$batmac" ] && {
 		uci set network.dev_bat0=device
 		uci set network.dev_bat0.name='bat0'

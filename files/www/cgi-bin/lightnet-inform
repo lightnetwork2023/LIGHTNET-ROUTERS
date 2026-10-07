@@ -37,11 +37,40 @@ batctl n 2>/dev/null | awk -v mac="$wmac" 'NR > 2 && tolower($2) == mac && $1 !=
 batctl n 2>/dev/null | awk -v mac="$mmac" 'NR > 2 && tolower($2) == mac && $1 == "mesh0" { found=1 } END { exit !found }' && wireless=1
 
 pending_cmd="$(head -n1 "/tmp/lightnet-cmd/$macfile" 2>/dev/null | tr -cd 'a-z')"
+hostname="$(jsonfilter -i "/etc/lightnet/inform/$macfile.json" -e '@.hostname' 2>/dev/null | tr -cd 'A-Za-z0-9._-')"
 adopted=0
 grep -qi "^$macfile$" /etc/lightnet/adopted.list 2>/dev/null && adopted=1
 if [ "$wired" = 1 ] && [ "$adopted" = 0 ] && [ "$pending_cmd" != "reset" ]; then
 	echo "$macfile" >>/etc/lightnet/adopted.list
 	adopted=1
+fi
+# Same satellite can reboot with a new lan1 MAC; keep the approval on hostname.
+if [ "$adopted" = 0 ] && [ "$pending_cmd" != "reset" ] && [ -n "$hostname" ]; then
+	case "$hostname" in
+		OpenWrt|openwrt) ;;
+		*)
+			for f in /etc/lightnet/inform/*.json; do
+				[ -f "$f" ] || continue
+				old="$(basename "$f" .json | tr 'A-F' 'a-f')"
+				[ "$old" = "$macfile" ] && continue
+				grep -qi "^$old$" /etc/lightnet/adopted.list 2>/dev/null || continue
+				h="$(jsonfilter -i "$f" -e '@.hostname' 2>/dev/null | tr -cd 'A-Za-z0-9._-')"
+				[ "$h" = "$hostname" ] || continue
+				tmp="$(mktemp /tmp/adopted.XXXXXX 2>/dev/null || echo /tmp/adopted.migrate)"
+				grep -vi "^$old$" /etc/lightnet/adopted.list 2>/dev/null | grep -vi "^$macfile$" >"$tmp"
+				echo "$macfile" >>"$tmp"
+				mv "$tmp" /etc/lightnet/adopted.list
+				mkdir -p /etc/lightnet/names
+				[ -f "/etc/lightnet/names/$old" ] && mv "/etc/lightnet/names/$old" "/etc/lightnet/names/$macfile"
+				[ -f "/tmp/lightnet-cmd/$old" ] && mv "/tmp/lightnet-cmd/$old" "/tmp/lightnet-cmd/$macfile"
+				pending_cmd="$(head -n1 "/tmp/lightnet-cmd/$macfile" 2>/dev/null | tr -cd 'a-z')"
+				rm -f "$f" "/etc/lightnet/inform/$old.token" "/tmp/lightnet-seen/$old"
+				logger -t lightnet "moved adoption $old -> $macfile (hostname $hostname)"
+				adopted=1
+				break
+			done
+			;;
+	esac
 fi
 
 backhaul="pending-wireless"

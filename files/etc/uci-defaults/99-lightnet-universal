@@ -82,6 +82,11 @@ if [ -n "$idhex" ]; then
 	uci -q delete network.lnmgmt.ip6addr
 	uci add_list network.lnmgmt.ip6addr="fd4c:6e65:7400::5:$(echo "$idhex" | cut -c7-10):$(echo "$idhex" | cut -c11-12)/64"
 fi
+[ -n "$lanmac" ] && {
+	uci set network.dev_lan1=device
+	uci set network.dev_lan1.name='lan1'
+	uci set network.dev_lan1.macaddr="$lanmac"
+}
 [ -n "$batmac" ] && uci set network.dev_bat0.macaddr="$batmac"
 [ -n "$meshmac" ] && uci set wireless.mesh0.macaddr="$meshmac"
 ap1mac="$(/usr/sbin/lightnet-macs ap1)"
