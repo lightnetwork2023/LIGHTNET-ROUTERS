@@ -89,6 +89,19 @@ on the network collides:
 MAC in `/tmp/lightnet-cmd/`; satellites pick them up on their next
 15 s inform cycle. Restarting the main router reboots it directly.
 
+### Reaching the management page (provisioned site)
+
+- **Main router, wired `lan1`** = management port (`br-mgmt`,
+  `192.168.200.1/24`): plug in, open `http://192.168.2.1` (or
+  `http://192.168.200.1`) — **no voucher needed**. The port forwards
+  nothing (no Internet, no access to the hotspot or mesh), and DHCP sends
+  only a `/32` route to `192.168.2.1` with **no default gateway**, so a
+  laptop that is also on Wi-Fi keeps its Internet uplink.
+- **Wi-Fi clients** (and satellite wired ports `lan1`/`lan2`) are behind
+  the CoovaChilli portal: enter a voucher first, then `192.168.2.1`,
+  SSH and HTTPS are reachable (`firewall.ln_hs_mgmt`).
+- `lan2` on the main and `wan` on satellites are BATMAN backhaul only.
+
 ## Web UI
 
 Custom **LightNet** theme on LuCI (replaces Bootstrap branding with

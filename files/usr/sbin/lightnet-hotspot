@@ -12,6 +12,8 @@ SOCK=/var/run/lightnet-chilli.sock
 HS_NET=192.168.88.0/24
 HS_GW=192.168.88.1
 VLAN=10
+MGMT_GW=192.168.200.1
+MGMT_PORTS="lan1"
 PORTAL_SRC=/etc/lightnet/portal
 WWWDIR=/var/run/lightnet-www
 
@@ -54,12 +56,47 @@ br_lan_section() {
 		i=$((i + 1))
 	done
 }
-# Every client-facing wired port is part of the portal, exactly like the SSIDs. The wired
+# Satellite client ports (lan1+lan2) are part of the portal, exactly like the SSIDs. The wired
 # backhaul (root: lan2 -> satellites, agent: wan -> master) is a BATMAN hardif and never
-# a client port. Management from a client port = authenticate on the portal first.
-client_ports() { [ "$(active_role)" = "agent" ] && echo "lan1 lan2" || echo "lan1"; }
+# a client port. On the root, lan1 is the wired MANAGEMENT port (br-mgmt): LuCI/SSH without a
+# voucher, but no forwarding at all, so it is not an Internet bypass. Wi-Fi stays behind chilli.
+client_ports() { [ "$(active_role)" = "agent" ] && echo "lan1 lan2"; }
 
-# pin the client ports to br-hotspot (and off br-lan); returns 1 when something changed
+# management-only network on the root's lan1. DHCP hands out a /32 route to 192.168.2.1 and
+# NO default gateway (option 3 suppressed), so a PC on Wi-Fi keeps its Internet uplink.
+mgmt_on() {
+	uci -q batch <<EOF
+set network.dev_mgmt=device
+set network.dev_mgmt.type='bridge'
+set network.dev_mgmt.name='br-mgmt'
+delete network.dev_mgmt.ports
+set network.mgmt=interface
+set network.mgmt.device='br-mgmt'
+set network.mgmt.proto='static'
+set network.mgmt.ipaddr='$MGMT_GW'
+set network.mgmt.netmask='255.255.255.0'
+set dhcp.mgmt=dhcp
+set dhcp.mgmt.interface='mgmt'
+set dhcp.mgmt.start='100'
+set dhcp.mgmt.limit='100'
+set dhcp.mgmt.leasetime='12h'
+set dhcp.mgmt.ra='disabled'
+set dhcp.mgmt.dhcpv6='disabled'
+delete dhcp.mgmt.dhcp_option
+add_list dhcp.mgmt.dhcp_option='3'
+add_list dhcp.mgmt.dhcp_option='121,192.168.2.1/32,$MGMT_GW'
+add_list dhcp.mgmt.dhcp_option='6,$MGMT_GW'
+EOF
+	for p in $MGMT_PORTS; do uci add_list network.dev_mgmt.ports="$p"; done
+	uci commit network; uci commit dhcp
+}
+
+mgmt_off() {
+	uci -q delete network.mgmt; uci -q delete network.dev_mgmt; uci -q delete dhcp.mgmt
+	uci commit network; uci commit dhcp
+}
+
+# pin the client ports to br-hotspot (and off br-lan); root: lan1 -> br-mgmt. Returns 1 when changed
 pin_ports() {
 	[ -n "$(uci -q get network.hotspot)" ] || return 0
 	br="$(br_lan_section)"; changed=0
@@ -69,6 +106,13 @@ pin_ports() {
 		printf '%s\n' $hs_ports | grep -qx "$p" || { uci add_list network.dev_hs.ports="$p"; changed=1; }
 		[ -n "$br" ] && printf '%s\n' $lan_ports | grep -qx "$p" && { uci del_list "network.@device[$br].ports=$p"; changed=1; }
 	done
+	if [ "$(active_role)" != "agent" ]; then
+		for p in $MGMT_PORTS; do
+			printf '%s\n' $hs_ports | grep -qx "$p" && { uci del_list network.dev_hs.ports="$p"; changed=1; }
+			[ -n "$br" ] && printf '%s\n' $lan_ports | grep -qx "$p" && { uci del_list "network.@device[$br].ports=$p"; changed=1; }
+		done
+		[ "$(uci -q get network.mgmt.ipaddr)" = "$MGMT_GW" ] && [ -n "$(uci -q get dhcp.mgmt)" ] && [ "$(uci -q get network.dev_mgmt.ports)" = "$MGMT_PORTS" ] || { mgmt_on; changed=1; }
+	fi
 	[ "$changed" = 1 ] || return 0
 	uci commit network
 	return 1
@@ -76,6 +120,7 @@ pin_ports() {
 
 # give the client ports back to br-lan (hotspot removed)
 unpin_ports() {
+	mgmt_off
 	br="$(br_lan_section)"; [ -n "$br" ] || return 0
 	lan_ports="$(uci -q get "network.@device[$br].ports")"
 	for p in lan1 lan2; do
@@ -174,12 +219,39 @@ set firewall.ln_hs_mgmt.src='hotspot'
 set firewall.ln_hs_mgmt.proto='tcp'
 set firewall.ln_hs_mgmt.dest_port='22 80 443'
 set firewall.ln_hs_mgmt.target='ACCEPT'
+delete firewall.ln_mgmt_zone
+set firewall.ln_mgmt_zone=zone
+set firewall.ln_mgmt_zone.name='mgmt'
+add_list firewall.ln_mgmt_zone.network='mgmt'
+set firewall.ln_mgmt_zone.input='REJECT'
+set firewall.ln_mgmt_zone.output='ACCEPT'
+set firewall.ln_mgmt_zone.forward='REJECT'
+delete firewall.ln_mgmt_web
+set firewall.ln_mgmt_web=rule
+set firewall.ln_mgmt_web.name='LightNet wired management port (LuCI/SSH, no portal, no Internet)'
+set firewall.ln_mgmt_web.src='mgmt'
+set firewall.ln_mgmt_web.proto='tcp'
+set firewall.ln_mgmt_web.dest_port='22 80 443'
+set firewall.ln_mgmt_web.target='ACCEPT'
+delete firewall.ln_mgmt_svc
+set firewall.ln_mgmt_svc=rule
+set firewall.ln_mgmt_svc.name='LightNet wired management port DHCP/DNS'
+set firewall.ln_mgmt_svc.src='mgmt'
+set firewall.ln_mgmt_svc.proto='udp'
+set firewall.ln_mgmt_svc.dest_port='53 67 68'
+set firewall.ln_mgmt_svc.target='ACCEPT'
+delete firewall.ln_mgmt_icmp
+set firewall.ln_mgmt_icmp=rule
+set firewall.ln_mgmt_icmp.name='LightNet wired management port ping'
+set firewall.ln_mgmt_icmp.src='mgmt'
+set firewall.ln_mgmt_icmp.proto='icmp'
+set firewall.ln_mgmt_icmp.target='ACCEPT'
 EOF
 	uci commit firewall
 }
 
 fw_off() {
-	for s in ln_hs_zone ln_hs_l2 ln_hs_l2_fwd ln_hs_fwd ln_hs_uam ln_hs_icmp ln_hs_dns ln_hs_mgmt; do uci -q delete "firewall.$s"; done
+	for s in ln_hs_zone ln_hs_l2 ln_hs_l2_fwd ln_hs_fwd ln_hs_uam ln_hs_icmp ln_hs_dns ln_hs_mgmt ln_mgmt_zone ln_mgmt_web ln_mgmt_svc ln_mgmt_icmp; do uci -q delete "firewall.$s"; done
 	uci commit firewall
 }
 
@@ -259,7 +331,7 @@ wifi_guard() {
 	pin_ports || fixed=1
 	# the kernel also sees client frames on br-hotspot; without this rule fw4's
 	# forward-chain REJECT answers each SYN with a TCP RST before chilli's redirect
-	[ -n "$(uci -q get firewall.ln_hs_l2_fwd)" ] && [ -n "$(uci -q get firewall.ln_hs_mgmt)" ] || { fw_on; fixed=1; /etc/init.d/firewall reload >/dev/null 2>&1; }
+	[ -n "$(uci -q get firewall.ln_hs_l2_fwd)" ] && [ -n "$(uci -q get firewall.ln_hs_mgmt)" ] && [ -n "$(uci -q get firewall.ln_mgmt_zone)" ] || { fw_on; fixed=1; /etc/init.d/firewall reload >/dev/null 2>&1; }
 	# config may be right while the APs never came up (radios started before the profile was restored)
 	if [ "$fixed" != 1 ]; then
 		[ -d /sys/class/net/phy0-ap0 ] || [ -d /sys/class/net/phy1-ap0 ] && return 0
@@ -268,6 +340,7 @@ wifi_guard() {
 	uci commit wireless; uci commit network
 	log "hotspot VLAN/firewall guard re-applied"
 	ubus call network reload >/dev/null 2>&1; wifi reload >/dev/null 2>&1
+	/etc/init.d/dnsmasq reload >/dev/null 2>&1; /etc/init.d/firewall reload >/dev/null 2>&1
 	return 1
 }
 
