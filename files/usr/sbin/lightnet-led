@@ -2,7 +2,7 @@
 # Status LED. The JCG Q20 only has red + blue GPIOs (no green:status).
 #   root  (main)      green if the LED exists, otherwise solid blue
 #                     = Internet reachable through the WAN/upstream
-#   agent (satellite) blinking blue = adopted and last inform answered <60 s
+#   agent (satellite) solid blue = adopted and last inform answered <60 s
 #   anything else     red (detecting, pending, mesh lost, no data)
 # Called every 15 s by lightnet-agent-loop; `lightnet-led red|blue|green` forces a colour.
 RED=/sys/class/leds/red:status
@@ -11,15 +11,6 @@ GREEN=/sys/class/leds/green:status
 STATE=/tmp/lightnet-led
 
 set_led() { [ -d "$1" ] || return 0; echo none >"$1/trigger" 2>/dev/null; echo "$2" >"$1/brightness" 2>/dev/null; }
-
-blink_blue() {
-	set_led "$RED" 0
-	set_led "$GREEN" 0
-	[ -d "$BLUE" ] || return 0
-	echo timer >"$BLUE/trigger" 2>/dev/null
-	echo 400 >"$BLUE/delay_on" 2>/dev/null
-	echo 1600 >"$BLUE/delay_off" 2>/dev/null
-}
 
 show() {
 	[ "$(cat "$STATE" 2>/dev/null)" = "$1" ] && return 0
@@ -30,14 +21,15 @@ show() {
 				set_led "$BLUE" 0
 				set_led "$GREEN" 1
 			else
-				# Q20 hardware has no green LED: main stays solid blue.
 				set_led "$RED" 0
 				set_led "$GREEN" 0
 				set_led "$BLUE" 1
 			fi
 			;;
 		blue)
-			blink_blue
+			set_led "$RED" 0
+			set_led "$GREEN" 0
+			set_led "$BLUE" 1
 			;;
 		*)
 			set_led "$BLUE" 0
