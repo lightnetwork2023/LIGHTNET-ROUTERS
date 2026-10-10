@@ -336,7 +336,7 @@ EOF
 	wifi_off=1
 	[ "$(uci -q get lightnet.main.adopted)" = "1" ] && wifi_off=0
 	uci set wireless.default_radio0.disabled="$wifi_off"
-	uci set wireless.default_radio1.disabled="$wifi_off"
+	# radio1 hosts mesh0; never disable the 5 GHz AP from role apply.
 	set_mgmt agent
 	uci commit network
 	uci commit wireless

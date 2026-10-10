@@ -28,11 +28,13 @@ esac
 disabled=0
 [ "$mode" = "portal" ] && [ "$portal_ready" != "true" ] && disabled=1
 hotspot="$(jsonfilter -i "$PROFILE" -e '@.hotspot' 2>/dev/null)"
+had_hs=0
+[ -n "$(uci -q get network.hotspot)" ] && had_hs=1
 if [ "$hotspot" = "true" ]; then
 	/usr/sbin/lightnet-hotspot net on
 	client_net=hotspot
 else
-	[ -n "$(uci -q get network.hotspot)" ] && /usr/sbin/lightnet-hotspot net off
+	[ "$had_hs" = 1 ] && /usr/sbin/lightnet-hotspot net off
 	client_net=lan
 fi
 channel24="$(jsonfilter -i "$PROFILE" -e '@.channel24' 2>/dev/null)"
@@ -61,7 +63,15 @@ grep -q '^adopted=' /etc/lightnet/state 2>/dev/null && sed -i 's/^adopted=.*/ado
 
 /etc/init.d/dnsmasq stop >/dev/null 2>&1 || true
 /etc/init.d/firewall stop >/dev/null 2>&1 || true
-[ "$hotspot" = "true" ] && { /etc/init.d/network reload >/dev/null 2>&1 || true; sleep 2; }
-wifi reload >/dev/null 2>&1 || true
+# radio1 is shared by mesh0 and the 5 GHz AP. `wifi reload` / network reload
+# tears mesh0 down; MT7915 often stays in MESH-GROUP-STARTED with zero peers
+# until a factory reset. Only bounce 2.4 GHz (radio0).
+if [ "$hotspot" = "true" ] && [ "$had_hs" = 0 ]; then
+	/etc/init.d/network reload >/dev/null 2>&1 || true
+	sleep 2
+fi
+wifi down radio0 >/dev/null 2>&1 || true
+wifi up radio0 >/dev/null 2>&1 || true
+ubus call hostapd.phy1-ap0 reload >/dev/null 2>&1 || true
 logger -t lightnet "adopted profile applied"
 exit 0

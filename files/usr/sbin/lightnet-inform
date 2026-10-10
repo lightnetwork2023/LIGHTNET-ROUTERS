@@ -119,13 +119,14 @@ wget -q -T 5 -O /tmp/lightnet-config.json "http://$controller/cgi-bin/lightnet-c
 if [ "$adopted" = 1 ] && grep -q '"state"[ ]*:[ ]*"pending"' /tmp/lightnet-config.json 2>/dev/null; then
 	uci set lightnet.main.adopted='0'
 	uci set wireless.default_radio0.disabled='1'
-	uci set wireless.default_radio1.disabled='1'
+	# Leave radio1 AP alone: disabling it and wifi-reloading drops mesh0.
 	uci -q delete lightnet.wifi.applied_version
 	uci -q delete lightnet.wifi.applied_sig
 	uci commit lightnet
 	uci commit wireless
 	sed -i 's/^adopted=.*/adopted=0/' /etc/lightnet/state
-	wifi reload >/dev/null 2>&1
+	wifi down radio0 >/dev/null 2>&1 || true
+	wifi up radio0 >/dev/null 2>&1 || true
 	logger -t lightnet "adoption revoked by controller"
 fi
 if grep -q '"adopted"[ ]*:[ ]*true' /tmp/lightnet-config.json 2>/dev/null; then
